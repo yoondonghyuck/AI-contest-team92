@@ -1,27 +1,40 @@
 @echo off
-chcp 65001 > nul
+setlocal
 cd /d "%~dp0"
 set "PATH=C:\Users\you56\AppData\Local\Programs\Git\cmd;C:\Users\you56\AppData\Local\Programs\Git\ucrt64\bin;%PATH%"
 
 echo ======================================================================
-echo   [GitHub Push] 고분자 예측 AI 프로젝트 저장소 업로드
+echo   [GitHub Push] Polymer Prediction AI Repository
 echo   Target: https://github.com/yoondonghyuck/AI-contest-team92.git
 echo ======================================================================
 echo.
-echo 깃허브(GitHub) 계정 인증 창 또는 브라우저가 뜨면 로그인을 승인해 주세요.
-echo.
 
+echo [Step 1] GitHub Authentication...
+echo Opening browser for login authorization if needed...
+git credential-manager github login
+
+echo.
+echo [Step 2] Pushing main branch to GitHub...
 git push -u origin main
 
+if %ERRORLEVEL% equ 0 goto SUCCESS
+goto FAILED
+
+:SUCCESS
 echo.
-if %ERRORLEVEL% equ 0 (
-    echo ======================================================================
-    echo   [성공] 깃허브 업로드가 완벽하게 완료되었습니다!
-    echo ======================================================================
-) else (
-    echo ----------------------------------------------------------------------
-    echo   푸시 중 오류가 발생했습니다. 토큰 인증 또는 권한을 확인해 주세요.
-    echo ----------------------------------------------------------------------
-)
+echo ======================================================================
+echo   [SUCCESS] GitHub push completed successfully!
+echo   https://github.com/yoondonghyuck/AI-contest-team92
+echo ======================================================================
+goto END
+
+:FAILED
+echo.
+echo ======================================================================
+echo   [FAILED] Push failed. Please check permissions or token.
+echo ======================================================================
+goto END
+
+:END
 echo.
 pause
