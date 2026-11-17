@@ -1,0 +1,19 @@
+{
+  "engine_status": "RUNNING_PGVECTOR_RAG_STABILIZED_DAEMON",
+  "started_at": "2026-11-02T08:34:23.744851+00:00",
+  "last_updated_at": "2026-11-17T06:16:38.994Z",
+  "max_sliding_window_size": 5000,
+  "current_pool_size": 5000,
+  "total_candidates_generated": 645869,
+  "rejected_stage1_octet_valency": 19242,
+  "rejected_stage1_dp_cutoff": 33881,
+  "rejected_stage1_thermodynamic_instability": 326,
+  "rejected_stage2_tanimoto_similarity": 5305,
+  "rejected_stage2_cosmetic_low_delta": 1177,
+  "rejected_stage3_sub_s_grade": 526704,
+  "accepted_s_grade": 59234,
+  "sliding_window_evictions": 59234,
+  "daemon_interval_ms": 2000,
+  "daemon_batch_size": 2,
+  "last_rejected_seq": 362240
+}

@@ -21,6 +21,10 @@ export interface AtomNode {
   x: number;
   y: number;
   z?: number;
+  domainColor?: string;
+  domainLabel?: string;
+  isGraftBranch?: boolean;
+  isJunction?: boolean;
 }
 
 export interface BondEdge {
@@ -28,6 +32,9 @@ export interface BondEdge {
   sourceId: string;
   targetId: string;
   type: BondType;
+  domainColor?: string;
+  isGraftLink?: boolean;
+  isBlockLink?: boolean;
 }
 
 export interface MolDrawCanvasProps {

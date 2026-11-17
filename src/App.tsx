@@ -1,6 +1,5 @@
 import { useMemo, useState, useEffect } from "react";
 import {
-  Activity,
   Dna,
   PanelLeftClose,
   PanelLeft,
@@ -9,10 +8,11 @@ import {
   Maximize2,
   Droplets,
   Gauge,
-  PenTool,
   Calculator,
   Award,
   X,
+  Database,
+  Sparkles,
 } from "lucide-react";
 import { ControlPanel } from "./components/ControlPanel";
 import { PolymerViewer } from "./components/PolymerViewer";
@@ -20,15 +20,23 @@ import { KesDashboard } from "./components/KesDashboard";
 import { MolDrawStudio } from "./components/MolDrawStudio";
 import { MathPhysicsLabModal } from "./components/MathPhysicsLabModal";
 import { ResearchValuePanel } from "./components/ResearchValuePanel";
+import { ChatMolecularEditor } from "./components/ChatMolecularEditor";
+import { UnifiedInputHubTabs, type InputHubMode } from "./components/UnifiedInputHub";
+import { PolymerDatasetExplorerModal } from "./components/PolymerDatasetExplorerModal";
+import { LiveSyntheticRecommendPanel, type LiveApplyPayload } from "./components/LiveSyntheticRecommendPanel";
 import { predictComprehensive } from "./model/surrogate";
-import { onnxEngine } from "./model/onnx";
 import { POLYMER_DATABASE, type PolymerDefinition } from "./model/polymers";
 import { DEFAULT_INPUTS, type FiberInputs } from "./types";
 import type { AtomNode, BondEdge } from "./components/MolDrawCanvas";
-import { loadMainAppState, saveMainAppState } from "./model/sketchStorage";
-import { createPolymerFromSketch } from "./model/moldrawPresets";
+import { loadMainAppState, saveMainAppState, saveCurrentWorkingSketch, loadCurrentWorkingSketch } from "./model/sketchStorage";
+import { createPolymerFromSketch, polymerToPresetMolecule } from "./model/moldrawPresets";
+import { loadPolymerInformaticsDataset } from "./model/polymerDatasetService";
+import type { DetailedCopolymerEvaluation } from "./model/polymerBlendService";
+import type { ParsedCopolymerStructure } from "./model/chatMolecularParser";
 
 export default function App() {
+  const [copolymerEvaluation, setCopolymerEvaluation] = useState<DetailedCopolymerEvaluation | null>(null);
+  const [parsedCopolymer, setParsedCopolymer] = useState<ParsedCopolymerStructure | undefined>(undefined);
   const [inputs, setInputs] = useState<FiberInputs>(() => {
     const saved = loadMainAppState();
     return saved?.inputs || DEFAULT_INPUTS;
@@ -63,9 +71,19 @@ export default function App() {
     const saved = loadMainAppState();
     return saved?.dashboardHeightMode || "normal";
   });
-  const [isMolDrawOpen, setIsMolDrawOpen] = useState<boolean>(false); // MolDraw 분자 스튜디오 모달
+  const [isMolDrawOpen, setIsMolDrawOpen] = useState<boolean>(false); // MolDraw 분자 스튜디오 모달 (하위 호환)
   const [isMathLabOpen, setIsMathLabOpen] = useState<boolean>(false); // 수학·물리 정밀 분석 랩 모달
   const [isResearchValueModalOpen, setIsResearchValueModalOpen] = useState<boolean>(false); // 신소재 R&D 가치성 평가 모달
+  const [isChatEditorOpen, setIsChatEditorOpen] = useState<boolean>(false); // 자연어 대화형 3D 분자 에디터 모달 (하위 호환)
+  const [isDatasetModalOpen, setIsDatasetModalOpen] = useState<boolean>(false); // 대규모 오픈 데이터셋 탐색기 모달
+  const [isLiveRecommendModalOpen, setIsLiveRecommendModalOpen] = useState<boolean>(false); // 실시간 AI S급 신소재 추천 모달
+  // 통합 입력 허브 모드 (2D 스케치 | 3D 뷰어 | AI 챗 입력)
+  const [activeInputMode, setActiveInputMode] = useState<InputHubMode>("3d_viewer");
+
+  // 대규모 고분자 인포매틱스 오픈 데이터셋 백그라운드 프리로드 (초기 1회)
+  useEffect(() => {
+    loadPolymerInformaticsDataset();
+  }, []);
 
   // 메인 파라미터 및 스케치 로컬 영속화
   useEffect(() => {
@@ -76,8 +94,6 @@ export default function App() {
       dashboardHeightMode,
     });
   }, [inputs, currentPolymer.id, sketchData, dashboardHeightMode]);
-
-  const status = onnxEngine.getStatus();
 
   // Esc 키로 전체화면 해제
   useEffect(() => {
@@ -97,14 +113,25 @@ export default function App() {
     return { comprehensive: result, latencyMs: performance.now() - t0 };
   }, [inputs]);
 
-  // 고분자 선택 핸들러 (반복단위 기본값 전부 1로 설정)
+  // 고분자 선택 핸들러 (3D 뷰어나 사이드바에서 고분자 변경 시 2D 스케치 및 채팅 캔버스도 즉시 동기화)
   const handleSelectPolymer = (p: PolymerDefinition) => {
     setCurrentPolymer(p);
+    if (!p.id.startsWith("copol_") && p.unitAtoms && p.unitAtoms.length > 0) {
+      const preset = polymerToPresetMolecule(p);
+      setSketchData({ atoms: preset.atoms, bonds: preset.bonds });
+      saveCurrentWorkingSketch(preset.atoms, preset.bonds);
+    } else if (p.id.startsWith("copol_")) {
+      const working = loadCurrentWorkingSketch();
+      if (working && working.atoms.length > 0) {
+        setSketchData({ atoms: working.atoms, bonds: working.bonds });
+      }
+    }
     setInputs((prev) => ({
       ...prev,
       polymerId: p.id,
       repeatCount: 1,
       molecularWeight: p.monomerMW,
+      customDescriptor: undefined,
     }));
   };
 
@@ -124,6 +151,23 @@ export default function App() {
       molecularWeight: mw,
       repeatCount: Math.max(1, Math.round(mw / currentPolymer.monomerMW)),
     }));
+  };
+
+  // 실시간 S급 가상 신소재 추천 후보(live_synthetic_pool.json) 적용 핸들러
+  const handleApplyLiveRecommendation = (payload: LiveApplyPayload) => {
+    setCurrentPolymer(payload.polymer);
+    setParsedCopolymer(payload.parsedCopolymer);
+    setSketchData({ atoms: payload.atoms, bonds: payload.bonds });
+    saveCurrentWorkingSketch(payload.atoms, payload.bonds);
+    setInputs((prev) => ({
+      ...prev,
+      polymerId: payload.polymer.id,
+      repeatCount: payload.recommendedInputs.repeatCount,
+      molecularWeight: payload.recommendedInputs.molecularWeight,
+      crystallinity: payload.recommendedInputs.crystallinity,
+      customDescriptor: payload.descriptor,
+    }));
+    setIsLiveRecommendModalOpen(false);
   };
 
   return (
@@ -153,9 +197,9 @@ export default function App() {
                 <Dna size={18} />
               </div>
               <div>
-                <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-2">
-                  <span>3D 고분자 사슬 & 미세 변수 연동 랩</span>
-                  <span className="rounded-full bg-emerald-500/20 border border-emerald-400/30 px-2 py-0.2 text-[10px] text-emerald-300 font-normal">
+                <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-2 whitespace-nowrap">
+                  <span>Trial-Zero</span>
+                  <span className="rounded-full bg-emerald-500/20 border border-emerald-400/30 px-2 py-0.5 text-[10px] text-emerald-300 font-normal">
                     3D Main Mode
                   </span>
                 </h1>
@@ -163,17 +207,37 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 text-xs text-slate-400">
-            {/* 실시간 염색성 퀵 배지 */}
-            <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-sky-200">
-              <Droplets size={12} className="text-sky-400" />
-              <span>염색성: <strong>{comprehensive.dyeability.grade} ({comprehensive.dyeability.score}점)</strong></span>
-            </div>
+          {/* ─────────────────────────────────────────────────────────────
+              중앙: [통합 입력 컨트롤러 (Unified Input Hub)] 세그먼트 탭 메뉴
+              [ 1. 2D 스케치 ] / [ 2. 3D 뷰어 ] / [ 3. 채팅 입력 (AI 3D) ]
+              ───────────────────────────────────────────────────────────── */}
+          <div className="hidden md:flex items-center">
+            <UnifiedInputHubTabs
+              activeMode={activeInputMode}
+              onChangeMode={setActiveInputMode}
+            />
+          </div>
 
-            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-0.5 text-emerald-200 text-[11px]">
-              <Activity size={12} />
-              {status.message}
-            </span>
+          <div className="flex items-center gap-2.5 text-xs text-slate-400">
+            {/* 공인, 통과, 탈락 데이터 스토리지 퀵 버튼 */}
+            <button
+              onClick={() => setIsLiveRecommendModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500/30 via-amber-500/30 to-rose-500/30 hover:from-emerald-400/50 hover:to-rose-400/50 text-amber-200 hover:text-white px-2.5 py-1 text-xs font-extrabold shadow-sm transition border border-amber-400/50 cursor-pointer"
+              title="공인, 통과, 탈락 데이터 스토리지 열기"
+            >
+              <Sparkles size={13} className="text-amber-400 animate-pulse" />
+              <span>공인, 통과, 탈락 데이터 스토리지</span>
+            </button>
+
+            {/* 대규모 오픈 데이터셋(3,284건) 탐색기 퀵 버튼 */}
+            <button
+              onClick={() => setIsDatasetModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-sky-600/30 via-indigo-600/30 to-purple-600/30 hover:from-sky-500/50 hover:to-purple-500/50 text-sky-200 hover:text-white px-2.5 py-1 text-xs font-semibold shadow-sm transition border border-sky-400/40 cursor-pointer"
+              title="PI1M 및 Polymer Genome 공인 고분자 인포매틱스 대규모 데이터셋(3,284건) 탐색기 열기"
+            >
+              <Database size={13} className="text-sky-400" />
+              <span>오픈 데이터셋 (3,284건)</span>
+            </button>
 
             {/* 신소재 R&D 가치 평가 전용 버튼 */}
             <button
@@ -195,20 +259,10 @@ export default function App() {
               <span>Math & Physics Lab</span>
             </button>
 
-            {/* 2D 분자 그리기 도구 버튼 */}
-            <button
-              onClick={() => setIsMolDrawOpen(true)}
-              className="flex items-center gap-1.5 rounded-lg bg-indigo-600/80 hover:bg-indigo-500 text-white px-2.5 py-1 text-xs font-semibold shadow-sm transition border border-indigo-400/30"
-              title="2D 분자 구조 그리기 스케처 열기"
-            >
-              <PenTool size={13} />
-              <span>2D 분자 그리기</span>
-            </button>
-
             {/* 전체화면 바로가기 */}
             <button
               onClick={() => setIsFullscreen(true)}
-              className="flex items-center gap-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-white px-2.5 py-1 text-xs font-semibold shadow-sm transition"
+              className="flex items-center gap-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-white px-2.5 py-1 text-xs font-semibold shadow-sm transition cursor-pointer"
               title="3D 캔버스 전체 화면으로 전환"
             >
               <Maximize2 size={13} />
@@ -230,27 +284,111 @@ export default function App() {
               onChange={setInputs}
               currentPolymer={currentPolymer}
               onSelectPolymer={handleSelectPolymer}
+              onOpenDatasetExplorer={() => setIsDatasetModalOpen(true)}
             />
           </div>
         )}
 
-        {/* 메인 3D 및 하단 대시보드 영역 (3D 화면이 최대 크기로 시원하게 펼쳐짐) */}
+        {/* 메인 3D 및 하단 대시보드 영역 (통합 입력 컨트롤러 모드 연동) */}
         <div className="flex flex-col flex-1 min-h-0 relative">
-          {/* 주인공: 3D 고분자 사슬 뷰어 (화면의 대부분을 시원하게 차지) */}
-          <div className="flex-1 min-h-0 relative">
-            <PolymerViewer
-              currentPolymer={currentPolymer}
-              onSelectPolymer={handleSelectPolymer}
-              repeatCount={inputs.repeatCount}
-              onRepeatCountChange={handleRepeatCountChange}
-              molecularWeight={inputs.molecularWeight}
-              onMolecularWeightChange={handleMolecularWeightChange}
-              inputs={inputs}
-              onInputsChange={setInputs}
-              isFullscreen={isFullscreen}
-              onToggleFullscreen={() => setIsFullscreen(!isFullscreen)}
-            />
-          </div>
+          {/* ─────────────────────────────────────────────────────────────
+              통합 입력 컨트롤러 모드 뷰:
+              [1. 2D 스케치] / [2. 3D 뷰어] / [3. 채팅 입력 (AI 3D)]
+              ───────────────────────────────────────────────────────────── */}
+          {activeInputMode === "chat_ai" ? (
+            /* 모드 3: AI 분자 챗 (Chat-Driven 3D Molecular Editor) */
+            <div className="flex-1 min-h-0 relative">
+              <ChatMolecularEditor
+                initialAtoms={sketchData?.atoms}
+                initialBonds={sketchData?.bonds}
+                isEmbedded={true}
+                onApplyToMainModel={({ polymer, descriptor, atoms, bonds, parsedCopolymer: parsed }) => {
+                  setCurrentPolymer(polymer);
+                  setSketchData({ atoms, bonds });
+                  saveCurrentWorkingSketch(atoms, bonds);
+                  if (parsed) setParsedCopolymer(parsed);
+                  setInputs((prev) => ({
+                    ...prev,
+                    polymerId: polymer.id,
+                    molecularWeight: Math.round(prev.repeatCount * descriptor.monomerMW),
+                    customDescriptor: descriptor,
+                  }));
+                }}
+                onStructureChange={(atoms, bonds, descriptor, parsed) => {
+                  const customPolymer = createPolymerFromSketch(atoms, bonds, descriptor);
+                  setCurrentPolymer(customPolymer);
+                  setSketchData({ atoms, bonds });
+                  saveCurrentWorkingSketch(atoms, bonds);
+                  if (parsed) setParsedCopolymer(parsed);
+                  setInputs((prev) => ({
+                    ...prev,
+                    polymerId: customPolymer.id,
+                    molecularWeight: Math.round(prev.repeatCount * descriptor.monomerMW),
+                    customDescriptor: descriptor,
+                  }));
+                }}
+                className="h-full rounded-none border-0"
+              />
+            </div>
+          ) : activeInputMode === "2d_sketch" ? (
+            /* 모드 1: 2D 분자 스케치 (MolDraw Studio Embedded - 3D 뷰어 & 채팅 입력 실시간 양방향 연동) */
+            <div className="flex-1 min-h-0 relative bg-slate-950">
+              <MolDrawStudio
+                initialAtoms={sketchData?.atoms}
+                initialBonds={sketchData?.bonds}
+                parsedCopolymer={parsedCopolymer}
+                onStructureChange={(atoms, bonds, descriptor, parsed) => {
+                  const customPolymer = createPolymerFromSketch(atoms, bonds, descriptor);
+                  setCurrentPolymer(customPolymer);
+                  setSketchData({ atoms, bonds });
+                  saveCurrentWorkingSketch(atoms, bonds);
+                  if (parsed) setParsedCopolymer(parsed);
+                  setInputs((prev) => ({
+                    ...prev,
+                    polymerId: customPolymer.id,
+                    molecularWeight: Math.round(prev.repeatCount * descriptor.monomerMW),
+                    customDescriptor: descriptor,
+                  }));
+                }}
+                onApplyToMainModel={({ polymer, descriptor, atoms, bonds, parsedCopolymer: parsed }) => {
+                  setCurrentPolymer(polymer);
+                  setSketchData({ atoms, bonds });
+                  saveCurrentWorkingSketch(atoms, bonds);
+                  if (parsed) setParsedCopolymer(parsed);
+                  setInputs((prev) => ({
+                    ...prev,
+                    polymerId: polymer.id,
+                    molecularWeight: Math.round(prev.repeatCount * descriptor.monomerMW),
+                    customDescriptor: descriptor,
+                  }));
+                  // 스케치 적용 후 3D 뷰어로 자동 전환
+                  setActiveInputMode("3d_viewer");
+                }}
+                className="h-full rounded-none border-0"
+              />
+            </div>
+          ) : (
+            /* 모드 2: 3D 고분자 사슬 & 미세 변수 뷰어 */
+            <div className="flex-1 min-h-0 relative">
+              <PolymerViewer
+                currentPolymer={currentPolymer}
+                onSelectPolymer={handleSelectPolymer}
+                repeatCount={inputs.repeatCount}
+                onRepeatCountChange={handleRepeatCountChange}
+                molecularWeight={inputs.molecularWeight}
+                onMolecularWeightChange={handleMolecularWeightChange}
+                inputs={inputs}
+                onInputsChange={setInputs}
+                isFullscreen={isFullscreen}
+                onToggleFullscreen={() => setIsFullscreen(!isFullscreen)}
+                onOpenDatasetExplorer={() => setIsDatasetModalOpen(true)}
+                onOpenLiveRecommendModal={() => setIsLiveRecommendModalOpen(true)}
+                onApplyLiveRecommendation={handleApplyLiveRecommendation}
+                onCopolymerEvaluationChange={setCopolymerEvaluation}
+                parsedCopolymer={parsedCopolymer}
+              />
+            </div>
+          )}
 
           {/* 하단: 염색성 & KES 물성 대시보드 (접기/펼치기 가능) */}
           {!isFullscreen && (
@@ -323,9 +461,13 @@ export default function App() {
                     latencyMs={latencyMs}
                     currentPolymer={currentPolymer}
                     inputs={inputs}
+                    onInputsChange={setInputs}
                     onOpenMathLab={() => setIsMathLabOpen(true)}
+                    onOpenLiveRecommendModal={() => setIsLiveRecommendModalOpen(true)}
+                    onApplyLiveRecommendation={handleApplyLiveRecommendation}
                     sketchAtoms={sketchData?.atoms}
                     sketchBonds={sketchData?.bonds}
+                    copolymerEvaluation={copolymerEvaluation}
                   />
                 </div>
               )}
@@ -341,10 +483,25 @@ export default function App() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-md p-3 sm:p-5 animate-in fade-in duration-150">
           <div className="relative w-full max-w-7xl max-h-[94vh] flex flex-col">
             <MolDrawStudio
-              onApplyToMainModel={({ polymer, descriptor, atoms, bonds }) => {
+              initialAtoms={sketchData?.atoms}
+              initialBonds={sketchData?.bonds}
+              parsedCopolymer={parsedCopolymer}
+              onStructureChange={(atoms, bonds, descriptor, copolymer) => {
+                setSketchData({ atoms, bonds });
+                if (copolymer) setParsedCopolymer(copolymer);
+                saveCurrentWorkingSketch(atoms, bonds);
+                setInputs((prev) => ({
+                  ...prev,
+                  molecularWeight: Math.round(prev.repeatCount * descriptor.monomerMW),
+                  customDescriptor: descriptor,
+                }));
+              }}
+              onApplyToMainModel={({ polymer, descriptor, atoms, bonds, parsedCopolymer: copolymer }) => {
                 // 1. 메인 3D 뷰어 화면의 고분자를 방금 스케치한 분자 구조로 즉시 교체
                 setCurrentPolymer(polymer);
                 setSketchData({ atoms, bonds });
+                if (copolymer) setParsedCopolymer(copolymer);
+                saveCurrentWorkingSketch(atoms, bonds);
                 // 2. 대리 모델 입력값(고분자ID, 분자량, 특성 디스크립터) 동기화
                 setInputs((prev) => ({
                   ...prev,
@@ -407,12 +564,74 @@ export default function App() {
               <ResearchValuePanel
                 currentPolymer={currentPolymer}
                 inputs={inputs}
+                onInputsChange={setInputs}
+                onApplyLiveRecommendation={(payload) => {
+                  handleApplyLiveRecommendation(payload);
+                  setIsResearchValueModalOpen(false);
+                }}
                 comprehensive={comprehensive}
                 sketchAtoms={sketchData?.atoms}
                 sketchBonds={sketchData?.bonds}
+                copolymerEvaluation={copolymerEvaluation}
                 className="h-full"
               />
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          6. AI 자연어 대화형 3D 분자 구조 생성 및 실시간 수정 모달
+          ───────────────────────────────────────────────────────────── */}
+      {isChatEditorOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-2 sm:p-4 animate-in fade-in duration-150">
+          <div className="relative w-full max-w-[96vw] h-[94vh] flex flex-col">
+            <ChatMolecularEditor
+              onApplyToMainModel={({ polymer, descriptor, atoms, bonds }) => {
+                // 1. 메인 3D 뷰어 화면의 고분자를 방금 생성/수정한 분자 구조로 즉시 교체
+                setCurrentPolymer(polymer);
+                setSketchData({ atoms, bonds });
+                // 2. 대리 모델 입력값(고분자ID, 분자량, 특성 디스크립터) 동기화
+                setInputs((prev) => ({
+                  ...prev,
+                  polymerId: polymer.id,
+                  molecularWeight: Math.round(prev.repeatCount * descriptor.monomerMW),
+                  customDescriptor: descriptor,
+                }));
+                // 3. 모달 닫기
+                setIsChatEditorOpen(false);
+              }}
+              onClose={() => setIsChatEditorOpen(false)}
+              className="h-full"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────
+          7. 대규모 고분자 인포매틱스 오픈 데이터셋 (3,284건) 탐색기 모달
+          ───────────────────────────────────────────────────────────── */}
+      <PolymerDatasetExplorerModal
+        isOpen={isDatasetModalOpen}
+        onClose={() => setIsDatasetModalOpen(false)}
+        onSelectPolymer={(polymer) => {
+          handleSelectPolymer(polymer);
+        }}
+        currentPolymerId={currentPolymer.id}
+      />
+
+      {/* ─────────────────────────────────────────────────────────────
+          8. 실시간 AI S급 신소재 R&D 추천 풀 (5,000건 슬라이딩 윈도우) 대화면 모달
+          ───────────────────────────────────────────────────────────── */}
+      {isLiveRecommendModalOpen && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/85 backdrop-blur-md p-2 sm:p-4 animate-in fade-in duration-150">
+          <div className="relative flex flex-col w-full max-w-7xl h-[92vh] rounded-2xl border border-amber-500/40 bg-[#080d18] shadow-[0_25px_80px_rgba(0,0,0,0.95)] overflow-hidden">
+            <LiveSyntheticRecommendPanel
+              isEmbedded={false}
+              currentPolymerId={currentPolymer.id}
+              onApplyRecommendation={handleApplyLiveRecommendation}
+              onClose={() => setIsLiveRecommendModalOpen(false)}
+            />
           </div>
         </div>
       )}

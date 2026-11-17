@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:live": "node scripts/run_live_daemon.mjs",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f postgres",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "backup": "node scripts/backup.js"
@@ -14,6 +18,7 @@
     "@react-three/fiber": "^9.3.0",
     "lucide-react": "^0.544.0",
     "onnxruntime-web": "^1.22.0",
+    "pg": "^8.23.1",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "recharts": "^3.2.1",
@@ -21,6 +26,8 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.13",
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
     "@types/three": "^0.180.0",

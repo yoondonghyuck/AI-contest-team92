@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import type { CrossSectionShape, FiberInputs } from "../types";
 import { SHAPE_LABELS } from "../types";
-import { Hexagon, Layers, Ruler, Waves, CircleDot, Sparkles, FlaskConical, Dna } from "lucide-react";
+import { Hexagon, Layers, Ruler, Waves, CircleDot, Sparkles, FlaskConical, Dna, Database, Search } from "lucide-react";
 import { POLYMER_DATABASE, type PolymerDefinition } from "../model/polymers";
 
 interface Props {
@@ -9,14 +9,17 @@ interface Props {
   onChange: (next: FiberInputs) => void;
   currentPolymer?: PolymerDefinition;
   onSelectPolymer?: (p: PolymerDefinition) => void;
+  onOpenDatasetExplorer?: () => void;
 }
 
 const SHAPES: CrossSectionShape[] = ["circular", "trilobal", "hollow"];
 
-export function ControlPanel({ inputs, onChange, currentPolymer, onSelectPolymer }: Props) {
+export function ControlPanel({ inputs, onChange, currentPolymer, onSelectPolymer, onOpenDatasetExplorer }: Props) {
   const set = <K extends keyof FiberInputs>(key: K, value: FiberInputs[K]) => {
     onChange({ ...inputs, [key]: value });
   };
+
+  const isBuiltIn30 = currentPolymer ? POLYMER_DATABASE.some((p) => p.id === currentPolymer.id) : true;
 
   return (
     <aside className="flex h-full flex-col gap-4 overflow-y-auto border-r border-white/10 bg-[#0c1220]/95 p-4 backdrop-blur">
@@ -28,55 +31,39 @@ export function ControlPanel({ inputs, onChange, currentPolymer, onSelectPolymer
         </p>
       </div>
 
-      {/* 0. 30종 고분자 선택 드롭다운 */}
+      {/* 0. 고분자 선택 및 대규모 오픈 데이터셋 연동 */}
       {currentPolymer && onSelectPolymer && (
-        <div className="rounded-xl border border-sky-500/30 bg-sky-950/40 p-3 shadow-lg">
-          <div className="mb-2 flex items-center justify-between text-xs">
+        <div className="rounded-xl border border-sky-500/30 bg-sky-950/40 p-3 shadow-lg space-y-2.5">
+          <div className="flex items-center justify-between text-xs">
             <span className="flex items-center gap-1.5 font-bold text-sky-200">
               <Dna size={15} className="text-sky-400" />
-              고분자 종류 (30종 DB)
+              <span>고분자 선택</span>
             </span>
             <span className="rounded bg-sky-500/20 px-1.5 py-0.2 text-[10px] font-mono text-sky-300">
-              {currentPolymer.shortName}
+              {isBuiltIn30 ? "표준 30종 DB" : "대규모 오픈 DB (PI1M)"}
             </span>
           </div>
-          <select
-            value={currentPolymer.id}
-            onChange={(e) => {
-              const found = POLYMER_DATABASE.find((p) => p.id === e.target.value);
-              if (found) onSelectPolymer(found);
-            }}
-            className="w-full rounded-lg border border-sky-400/40 bg-slate-900 py-1.5 px-2 text-xs font-semibold text-white focus:border-sky-400 focus:outline-none cursor-pointer"
-          >
-            <optgroup label="[A. 범용·공학용 단일 고분자 (11종)]">
-              {POLYMER_DATABASE.filter((p) => p.category.includes("단일")).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.shortName} · {p.koreanName.split(" ")[0]}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="[B. 공중합체 & 사슬구조 (10종)]">
-              {POLYMER_DATABASE.filter((p) => p.category.includes("공중합체")).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.shortName} · {p.koreanName.split(" ")[0]}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="[C. 열경화성 수지 (5종)]">
-              {POLYMER_DATABASE.filter((p) => p.category.includes("열경화성")).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.shortName} · {p.koreanName.split(" ")[0]}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="[D. 특수 구조 & 기능성 (4종)]">
-              {POLYMER_DATABASE.filter((p) => p.category.includes("특수")).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.shortName} · {p.koreanName.split(" ")[0]}
-                </option>
-              ))}
-            </optgroup>
-          </select>
+
+          {/* 대규모 오픈 데이터셋 검색 탐색기 버튼 */}
+          {onOpenDatasetExplorer && (
+            <button
+              type="button"
+              onClick={onOpenDatasetExplorer}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-sky-500/20 via-indigo-500/20 to-purple-500/20 hover:from-sky-500/35 hover:to-purple-500/35 border border-sky-400/40 py-2 px-3 text-xs font-bold text-sky-200 transition cursor-pointer shadow-sm group"
+            >
+              <Database size={14} className="text-sky-400 group-hover:scale-110 transition-transform" />
+              <span>대규모 오픈 데이터셋 탐색기 (3,284건)</span>
+              <Search size={13} className="text-slate-400 ml-auto" />
+            </button>
+          )}
+
+          <div className="rounded-lg bg-black/40 border border-white/10 p-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-white font-mono">{currentPolymer.shortName}</span>
+              <span className="text-[10px] text-sky-300">{currentPolymer.category.split(" ")[0]}</span>
+            </div>
+            <p className="mt-0.5 text-[11px] text-slate-300 truncate">{currentPolymer.koreanName}</p>
+          </div>
           <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
             <span>밀도: {currentPolymer.density} g/cm³</span>
             <span>Tg: {currentPolymer.tg}℃</span>

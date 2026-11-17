@@ -2,6 +2,14 @@ node_modules
 dist
 .DS_Store
 *.local
+.env
+.env.*
+!.env.example
 tsconfig.tsbuildinfo
 backups
 .vscode
+__pycache__/
+*.pyc
+public/data/synthetic_polymers_5000.json
+storage/materials/*.json
+storage/archived_rejected_index.json

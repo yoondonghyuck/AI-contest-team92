@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Environment, Grid } from "@react-three/drei";
+import { OrbitControls, Grid } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
   RotateCcw,
@@ -21,6 +21,13 @@ import {
   type RenderAtom,
   ELEMENT_PROPERTIES,
 } from "../model/polymers";
+import {
+  type PolymerBlendItem,
+  type BlendDisplayMode,
+  type CopolymerArchitecture,
+  generateMultiChainData,
+  generateCopolymerChain3D,
+} from "../model/polymerBlendService";
 import { PolymerChainMesh, MacroPolymerCoilMesh } from "./PolymerScene";
 import { FloatingTuner } from "./FloatingTuner";
 import type { FiberInputs } from "../types";
@@ -35,6 +42,9 @@ interface PolymerCanvasProps {
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
   onSelectPolymer?: (polymer: PolymerDefinition) => void;
+  blendItems?: PolymerBlendItem[];
+  blendMode?: BlendDisplayMode;
+  copolymerArch?: CopolymerArchitecture;
 }
 
 export function PolymerCanvas({
@@ -47,6 +57,9 @@ export function PolymerCanvas({
   isFullscreen,
   onToggleFullscreen,
   onSelectPolymer,
+  blendItems,
+  blendMode = "parallel",
+  copolymerArch = "block",
 }: PolymerCanvasProps) {
   // 스케일 모드: micro(원자 상세 뷰) vs macro(수천~수만 단위체 거대 사슬 코일 뷰)
   const isHighMw = repeatCount > 35;
@@ -76,13 +89,42 @@ export function PolymerCanvas({
     return generatePolymerChain(polymer, microCount, showHydrogen);
   }, [polymer, microCount, showHydrogen]);
 
+  // 1-1. 다중 고분자 나란히 비교 블렌드 데이터 (3,284건 오픈 데이터셋 및 표준 혼합 지원)
+  const isMultiParallel = Boolean(blendItems && blendItems.length > 1 && blendMode === "parallel");
+  const multiChainData = useMemo(() => {
+    if (!isMultiParallel || !blendItems) return { chains: [], combinedBounds: bounds };
+    return generateMultiChainData(blendItems, microCount, showHydrogen);
+  }, [isMultiParallel, blendItems, microCount, showHydrogen, bounds]);
+
+  // 1-2. 공중합체(Random, Block, Graft) 정밀 3D 사슬 빌더
+  const isCopolymerMode = Boolean(blendItems && blendItems.length >= 2 && blendMode === "copolymer");
+  const copolymerChainData = useMemo(() => {
+    if (!isCopolymerMode || !blendItems || blendItems.length < 2) return null;
+    return generateCopolymerChain3D(
+      blendItems[0].polymer,
+      blendItems[1].polymer,
+      copolymerArch || "block",
+      blendItems[0].ratio,
+      microCount,
+      showHydrogen,
+      blendItems[2]?.polymer,
+      blendItems
+    );
+  }, [isCopolymerMode, blendItems, copolymerArch, microCount, showHydrogen]);
+
+  const activeAtoms = isCopolymerMode && copolymerChainData ? copolymerChainData.atoms : atoms;
+  const activeBonds = isCopolymerMode && copolymerChainData ? copolymerChainData.bonds : bonds;
+  const activeCenter = isCopolymerMode && copolymerChainData ? copolymerChainData.center : center;
+  const activeBounds = isCopolymerMode && copolymerChainData ? copolymerChainData.bounds : bounds;
+
   // 2. 거시적 고분자 사슬 코일 데이터 (수천~수십만 단위체 3D 튜브 궤적)
   const macroPoints = useMemo(() => {
     return generateMacroCoilPoints(repeatCount, crystallinity);
   }, [repeatCount, crystallinity]);
 
   // 최적 카메라 거리 계산
-  const maxSpan = viewScale === "macro" ? 45 : Math.max(bounds[0], bounds[1], bounds[2]);
+  const effectiveBounds = isMultiParallel ? multiChainData.combinedBounds : activeBounds;
+  const maxSpan = viewScale === "macro" ? 45 : Math.max(effectiveBounds[0], effectiveBounds[1], effectiveBounds[2]);
   const cameraZ = viewScale === "macro" ? 48 : Math.max(8, maxSpan * 0.95 + 4);
 
   // 카메라 시점 초기화
@@ -247,24 +289,46 @@ export function PolymerCanvas({
           2. Three.js 3D 캔버스 영역 (대형 화면)
           ───────────────────────────────────────────────────────────── */}
       <div className="relative flex-1 min-h-0">
-        <Canvas camera={{ position: [0, 2.5, cameraZ], fov: 45 }} dpr={[1, 2]}>
+        <Canvas
+          camera={{ position: [0, 2.5, cameraZ], fov: 45 }}
+          dpr={[1, 1.5]}
+          gl={{ powerPreference: "high-performance", antialias: true }}
+        >
           <color attach="background" args={["#070b14"]} />
-          <ambientLight intensity={0.65} />
-          <directionalLight position={[12, 18, 12]} intensity={1.5} castShadow />
-          <directionalLight position={[-12, -10, -8]} intensity={0.5} />
-          <pointLight position={[0, 15, 0]} intensity={0.8} />
+          <ambientLight intensity={0.75} />
+          <hemisphereLight args={["#bae6fd", "#0f172a", 0.55]} />
+          <directionalLight position={[12, 18, 12]} intensity={1.45} />
+          <directionalLight position={[-12, -10, -8]} intensity={0.55} />
+          <pointLight position={[0, 15, 0]} intensity={0.75} />
 
-          {/* 조건부 3D 렌더링 */}
+          {/* 조건부 3D 렌더링 (단일 사슬 vs 다중 고분자 동시 비교 렌더링) */}
           {viewScale === "micro" ? (
-            <PolymerChainMesh
-              atoms={atoms}
-              bonds={bonds}
-              center={center}
-              styleMode={styleMode}
-              colorByUnit={colorByUnit}
-              autoRotate={autoRotate}
-              onHoverAtom={setHoveredAtom}
-            />
+            isMultiParallel ? (
+              <group>
+                {multiChainData.chains.map((chain) => (
+                  <PolymerChainMesh
+                    key={chain.id}
+                    atoms={chain.atoms}
+                    bonds={chain.bonds}
+                    center={[0, 0, 0]}
+                    styleMode={styleMode}
+                    colorByUnit={colorByUnit}
+                    autoRotate={autoRotate}
+                    onHoverAtom={setHoveredAtom}
+                  />
+                ))}
+              </group>
+            ) : (
+              <PolymerChainMesh
+                atoms={activeAtoms}
+                bonds={activeBonds}
+                center={activeCenter}
+                styleMode={styleMode}
+                colorByUnit={colorByUnit}
+                autoRotate={autoRotate}
+                onHoverAtom={setHoveredAtom}
+              />
+            )
           ) : (
             <MacroPolymerCoilMesh
               points={macroPoints}
@@ -286,7 +350,6 @@ export function PolymerCanvas({
             fadeDistance={Math.max(45, maxSpan * 1.8)}
           />
 
-          <Environment preset="city" />
           <OrbitControls
             ref={controlsRef}
             makeDefault

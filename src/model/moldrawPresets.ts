@@ -1,6 +1,7 @@
 import type { AtomNode, BondEdge, AtomSymbol } from "../components/MolDrawCanvas";
 import { POLYMER_DATABASE, type AtomDef, type BondDef, type PolymerDefinition } from "./polymers";
 import type { MolecularDescriptor } from "./molecularDescriptor";
+import { convertRealRecordToPolymerDefinition, type RealPolymerRecord } from "./polymerDatasetService";
 
 export type PresetCategory = "polymer" | "monomer" | "pharma";
 
@@ -619,6 +620,93 @@ export const CORE_CHEMICAL_PRESETS: PresetMolecule[] = [
       { id: "ipb4", sourceId: "ip4", targetId: "ip5", type: "double" },
     ],
   },
+  {
+    id: "ethylene",
+    name: "Ethylene monomer",
+    nameKo: "에틸렌 (PE 단량체)",
+    formula: "C₂H₄",
+    smiles: "C=C",
+    mw: 28.05,
+    description: "폴리에틸렌(PE) 및 에틸렌 공중합체 합성의 가장 기본적인 올레핀 단량체",
+    category: "monomer",
+    atoms: [
+      { id: "et1", symbol: "C", x: 185, y: 200 },
+      { id: "et2", symbol: "C", x: 265, y: 200 },
+    ],
+    bonds: [
+      { id: "etb1", sourceId: "et1", targetId: "et2", type: "double" },
+    ],
+  },
+  {
+    id: "vinyl_acetate",
+    name: "Vinyl Acetate monomer (VAM)",
+    nameKo: "아세트산비닐 (PVAc / PVA 단량체)",
+    formula: "C₄H₆O₂",
+    smiles: "CC(=O)OC=C",
+    mw: 86.09,
+    description: "폴리아세트산비닐(PVAc), 폴리비닐알코올(PVA) 및 EVA 공중합체 핵심 단량체",
+    category: "monomer",
+    atoms: [
+      { id: "va1", symbol: "C", x: 130, y: 215 },
+      { id: "va2", symbol: "C", x: 190, y: 180 },
+      { id: "va3", symbol: "O", x: 250, y: 215 },
+      { id: "va4", symbol: "C", x: 310, y: 180 },
+      { id: "va5", symbol: "O", x: 310, y: 120 },
+      { id: "va6", symbol: "C", x: 370, y: 215 },
+    ],
+    bonds: [
+      { id: "vab1", sourceId: "va1", targetId: "va2", type: "double" },
+      { id: "vab2", sourceId: "va2", targetId: "va3", type: "single" },
+      { id: "vab3", sourceId: "va3", targetId: "va4", type: "single" },
+      { id: "vab4", sourceId: "va4", targetId: "va5", type: "double" },
+      { id: "vab5", sourceId: "va4", targetId: "va6", type: "single" },
+    ],
+  },
+  {
+    id: "lactic_acid",
+    name: "L-Lactic Acid / Lactide",
+    nameKo: "젖산 / 락타이드 (PLA 친환경 단량체)",
+    formula: "C₃H₆O₃",
+    smiles: "CC(O)C(=O)O",
+    mw: 90.08,
+    description: "생분해성 폴리락트산(PLA) 바이오 플라스틱의 핵심 단량체",
+    category: "monomer",
+    atoms: [
+      { id: "la1", symbol: "C", x: 140, y: 220 },
+      { id: "la2", symbol: "C", x: 205, y: 185 },
+      { id: "la3", symbol: "O", x: 205, y: 120 },
+      { id: "la4", symbol: "C", x: 270, y: 220 },
+      { id: "la5", symbol: "O", x: 330, y: 185 },
+      { id: "la6", symbol: "O", x: 270, y: 280 },
+    ],
+    bonds: [
+      { id: "lab1", sourceId: "la1", targetId: "la2", type: "single" },
+      { id: "lab2", sourceId: "la2", targetId: "la3", type: "single" },
+      { id: "lab3", sourceId: "la2", targetId: "la4", type: "single" },
+      { id: "lab4", sourceId: "la4", targetId: "la5", type: "single" },
+      { id: "lab5", sourceId: "la4", targetId: "la6", type: "double" },
+    ],
+  },
+  {
+    id: "ethylene_oxide",
+    name: "Ethylene Oxide (EO)",
+    nameKo: "산화에틸렌 (PEG / PEO 단량체)",
+    formula: "C₂H₄O",
+    smiles: "C1CO1",
+    mw: 44.05,
+    description: "친수성 폴리에틸렌글리콜(PEG/PEO) 개환 중합의 3원환 에폭사이드 단량체",
+    category: "monomer",
+    atoms: [
+      { id: "eo1", symbol: "C", x: 190, y: 225 },
+      { id: "eo2", symbol: "C", x: 260, y: 225 },
+      { id: "eo3", symbol: "O", x: 225, y: 165 },
+    ],
+    bonds: [
+      { id: "eob1", sourceId: "eo1", targetId: "eo2", type: "single" },
+      { id: "eob2", sourceId: "eo2", targetId: "eo3", type: "single" },
+      { id: "eob3", sourceId: "eo3", targetId: "eo1", type: "single" },
+    ],
+  },
 ];
 
 /**
@@ -633,6 +721,122 @@ export const POPULAR_MOLECULES: PresetMolecule[] = [
   ...CORE_CHEMICAL_PRESETS,
   ...MAIN_LAB_POLYMER_PRESETS,
 ];
+
+/**
+ * 3,284건 오픈 데이터셋(RealPolymerRecord) 항목을 2D 에디터 캔버스용 PresetMolecule로 즉시 변환
+ */
+export function realRecordToPresetMolecule(record: RealPolymerRecord): PresetMolecule {
+  const polyDef = convertRealRecordToPolymerDefinition(record);
+  const basePreset = polymerToPresetMolecule(polyDef);
+  return {
+    ...basePreset,
+    id: `open_${record.id}`,
+    name: `${record.name} [${record.source}]`,
+    nameKo: `${record.koreanName || record.name} (오픈DB 단량체/반복단위)`,
+    formula: record.smiles,
+    smiles: record.smiles,
+    mw: record.monomerMw,
+    description: `[${record.source} 공인 DB · Tg ${record.tg}℃ · 밀도 ${record.density}g/cm³] ${record.description || record.category}`,
+    category: "monomer",
+  };
+}
+
+/**
+ * 현재 2D 캔버스 위에 새로운 단량체/고분자 구조를 우측에 이어 붙이거나(조합/공중합) 배치하는 유틸리티
+ */
+export function appendMoleculeToCanvas(
+  existingAtoms: AtomNode[],
+  existingBonds: BondEdge[],
+  incoming: { atoms: AtomNode[]; bonds: BondEdge[] },
+  connectWithSingleBond = true
+): { atoms: AtomNode[]; bonds: BondEdge[] } {
+  if (existingAtoms.length === 0) {
+    return {
+      atoms: incoming.atoms.map((a) => ({ ...a })),
+      bonds: incoming.bonds.map((b) => ({ ...b })),
+    };
+  }
+
+  // 기존 원자들의 우측 끝(maxX) 및 평균 Y 계산
+  let existingMaxX = -Infinity;
+  let existingSumY = 0;
+  let tailAtom: AtomNode = existingAtoms[existingAtoms.length - 1];
+
+  existingAtoms.forEach((a) => {
+    existingSumY += a.y;
+    if (a.x > existingMaxX) {
+      existingMaxX = a.x;
+      tailAtom = a;
+    }
+  });
+  const existingCenterY = existingSumY / existingAtoms.length;
+
+  // 새로 추가할 원자들의 좌측 끝(minX) 및 평균 Y 계산
+  let incomingMinX = Infinity;
+  let incomingSumY = 0;
+  let headIncomingOrigId = incoming.atoms[0]?.id;
+
+  incoming.atoms.forEach((a) => {
+    incomingSumY += a.y;
+    if (a.x < incomingMinX) {
+      incomingMinX = a.x;
+      headIncomingOrigId = a.id;
+    }
+  });
+  const incomingCenterY = incoming.atoms.length > 0 ? incomingSumY / incoming.atoms.length : existingCenterY;
+
+  const gapPx = 68;
+  const shiftX = existingMaxX + gapPx - (incomingMinX === Infinity ? 0 : incomingMinX);
+  const shiftY = existingCenterY - incomingCenterY;
+  const uid = `add_${Date.now().toString(36)}_${Math.floor(Math.random() * 1000)}`;
+
+  const idMap = new Map<string, string>();
+  const newAtoms: AtomNode[] = incoming.atoms.map((a, idx) => {
+    const newId = `${uid}_a${idx}`;
+    idMap.set(a.id, newId);
+    return {
+      ...a,
+      id: newId,
+      x: Math.round(a.x + shiftX),
+      y: Math.round(a.y + shiftY),
+    };
+  });
+
+  const newBonds: BondEdge[] = incoming.bonds
+    .map((b, idx) => {
+      const s = idMap.get(b.sourceId);
+      const t = idMap.get(b.targetId);
+      if (!s || !t) return null;
+      return {
+        ...b,
+        id: `${uid}_b${idx}`,
+        sourceId: s,
+        targetId: t,
+      };
+    })
+    .filter(Boolean) as BondEdge[];
+
+  // 기존 사슬의 우측 말단 탄소/헤테로원자와 신규 단량체의 좌측 시작 원자를 단일 결합으로 자동 연결할지 여부
+  const bridgeBonds: BondEdge[] = [];
+  if (connectWithSingleBond && tailAtom && headIncomingOrigId && idMap.has(headIncomingOrigId)) {
+    // 만약 tailAtom이 H가 아니라면 연결
+    const connectSource =
+      tailAtom.symbol !== "H"
+        ? tailAtom
+        : existingAtoms.find((a) => a.symbol === "C") || tailAtom;
+    bridgeBonds.push({
+      id: `${uid}_bridge`,
+      sourceId: connectSource.id,
+      targetId: idMap.get(headIncomingOrigId)!,
+      type: "single",
+    });
+  }
+
+  return {
+    atoms: [...existingAtoms, ...newAtoms],
+    bonds: [...existingBonds, ...newBonds, ...bridgeBonds],
+  };
+}
 
 /**
  * 벤젠 고리 템플릿 생성기 (지정한 x, y 중심 위치에 6각 고리 생성)

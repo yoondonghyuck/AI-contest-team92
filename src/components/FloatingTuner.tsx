@@ -8,7 +8,7 @@ import {
   Dna,
 } from "lucide-react";
 import type { CrossSectionShape, FiberInputs } from "../types";
-import { POLYMER_DATABASE, type PolymerDefinition } from "../model/polymers";
+import type { PolymerDefinition } from "../model/polymers";
 
 interface Props {
   inputs: FiberInputs;
@@ -27,7 +27,6 @@ export function FloatingTuner({
   isOpen,
   onToggle,
   currentPolymer,
-  onSelectPolymer,
 }: Props) {
   const set = <K extends keyof FiberInputs>(key: K, value: FiberInputs[K]) => {
     onChange({ ...inputs, [key]: value });
@@ -71,55 +70,28 @@ export function FloatingTuner({
 
       {/* 슬라이더 및 선택자 목록 */}
       <div className="mt-3 space-y-3 max-h-[60vh] overflow-y-auto pr-1">
-        {/* 0. 30종 고분자 빠른 전환 셀렉터 */}
-        {currentPolymer && onSelectPolymer && (
+        {/* 0. 현재 로드된 고분자 정보 요약 */}
+        {currentPolymer && (
           <div className="rounded-xl border border-sky-500/30 bg-sky-950/40 p-2.5">
-            <div className="flex items-center justify-between text-xs mb-1.5">
+            <div className="flex items-center justify-between text-xs mb-1">
               <span className="flex items-center gap-1.5 font-bold text-sky-200">
                 <Dna size={13} className="text-sky-400" />
-                고분자 선택 (30종)
+                활성 고분자
               </span>
-              <span className="text-[10px] text-sky-300 font-mono">
+              <span className="rounded bg-sky-500/20 px-1.5 py-0.2 text-[10px] font-mono font-bold text-sky-300">
                 {currentPolymer.shortName}
               </span>
             </div>
-            <select
-              value={currentPolymer.id}
-              onChange={(e) => {
-                const found = POLYMER_DATABASE.find((p) => p.id === e.target.value);
-                if (found) onSelectPolymer(found);
-              }}
-              className="w-full rounded-lg border border-sky-400/40 bg-slate-900 py-1.5 px-2 text-xs font-medium text-white focus:border-sky-400 focus:outline-none cursor-pointer"
-            >
-              <optgroup label="[A. 범용·공학용 단일 고분자 (11종)]">
-                {POLYMER_DATABASE.filter((p) => p.category.includes("단일")).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.shortName} · {p.koreanName.split(" ")[0]}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="[B. 공중합체 & 사슬구조 (10종)]">
-                {POLYMER_DATABASE.filter((p) => p.category.includes("공중합체")).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.shortName} · {p.koreanName.split(" ")[0]}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="[C. 열경화성 수지 (5종)]">
-                {POLYMER_DATABASE.filter((p) => p.category.includes("열경화성")).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.shortName} · {p.koreanName.split(" ")[0]}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="[D. 특수 구조 & 기능성 (4종)]">
-                {POLYMER_DATABASE.filter((p) => p.category.includes("특수")).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.shortName} · {p.koreanName.split(" ")[0]}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
+            <p className="text-[11px] font-medium text-white truncate">
+              {currentPolymer.koreanName}
+            </p>
+            <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+              <span>Tg: {currentPolymer.tg}℃</span>
+              <span>밀도: {currentPolymer.density} g/cm³</span>
+            </div>
+            <p className="mt-1.5 text-[9px] text-slate-500">
+              💡 상단 검색창(PE, PET, 나일론 등) 또는 오픈 데이터셋에서 자유롭게 변경 가능
+            </p>
           </div>
         )}
         {/* 1. 결정화도 */}

@@ -1,104 +1,14 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import type { RenderAtom, RenderBond } from "../model/polymers";
 
-// 두 3D 좌표 사이를 잇는 원통(Cylinder) 메쉬
-function BondCylinder({
-  posA,
-  posB,
-  order = 1,
-  color = "#64748b",
-  radius = 0.08,
-}: {
-  posA: [number, number, number];
-  posB: [number, number, number];
-  order?: 1 | 2 | 3;
-  color?: string;
-  radius?: number;
-}) {
-  const { position, quaternion, length } = useMemo(() => {
-    const vA = new THREE.Vector3(...posA);
-    const vB = new THREE.Vector3(...posB);
-    const mid = new THREE.Vector3().addVectors(vA, vB).multiplyScalar(0.5);
-    const dir = new THREE.Vector3().subVectors(vB, vA);
-    const len = dir.length();
+// GPU 메모리 재할당 및 Draw Call 병목 방지를 위한 공용 단위 Geometry (모듈 싱글톤)
+const SHARED_ATOM_SPHERE_GEOM = new THREE.SphereGeometry(1, 16, 16);
+const SHARED_BOND_CYLINDER_GEOM = new THREE.CylinderGeometry(1, 1, 1, 10);
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
 
-    const quat = new THREE.Quaternion();
-    if (len > 0.0001) {
-      dir.normalize();
-      // Three.js CylinderGeometry의 기본 방향은 Y축(0, 1, 0)
-      quat.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-    }
-    return {
-      position: [mid.x, mid.y, mid.z] as [number, number, number],
-      quaternion: quat,
-      length: Math.max(len, 0.05),
-    };
-  }, [posA, posB]);
-
-  const effectiveRadius = order === 2 ? radius * 1.35 : order === 3 ? radius * 1.6 : radius;
-
-  return (
-    <mesh position={position} quaternion={quaternion}>
-      <cylinderGeometry args={[effectiveRadius, effectiveRadius, length, 12]} />
-      <meshStandardMaterial
-        color={color}
-        roughness={0.35}
-        metalness={0.25}
-        transparent={true}
-        opacity={0.92}
-      />
-    </mesh>
-  );
-}
-
-// 개별 원자 구체
-function AtomSphere({
-  atom,
-  styleMode,
-  colorByUnit,
-  onHover,
-}: {
-  atom: RenderAtom;
-  styleMode: "ballAndStick" | "spaceFilling" | "wireframe";
-  colorByUnit: boolean;
-  onHover?: (atom: RenderAtom | null) => void;
-}) {
-  // 단위체별 색조 구분 (colorByUnit 활성화 시)
-  const unitHue = (atom.unitIndex * 57) % 360;
-  const atomColor = colorByUnit && atom.element === "C"
-    ? `hsl(${unitHue}, 65%, 48%)`
-    : atom.color;
-
-  const radius =
-    styleMode === "spaceFilling"
-      ? atom.radius * 2.2
-      : styleMode === "wireframe"
-      ? atom.radius * 0.4
-      : atom.radius;
-
-  return (
-    <mesh
-      position={atom.position}
-      onPointerOver={(e) => {
-        e.stopPropagation();
-        onHover?.(atom);
-      }}
-      onPointerOut={() => onHover?.(null)}
-    >
-      <sphereGeometry args={[radius, 24, 24]} />
-      <meshStandardMaterial
-        color={atomColor}
-        roughness={0.2}
-        metalness={0.15}
-        wireframe={styleMode === "wireframe"}
-      />
-    </mesh>
-  );
-}
-
-// 3D 고분자 사슬 렌더링 그룹
+// 3D 고분자 사슬 렌더링 그룹 (InstancedMesh 기반 단일 Draw-Call 최적화: 1,500+ 메쉬 -> 2 Draw Calls)
 export function PolymerChainMesh({
   atoms,
   bonds,
@@ -117,6 +27,9 @@ export function PolymerChainMesh({
   onHoverAtom?: (atom: RenderAtom | null) => void;
 }) {
   const groupRef = useRef<THREE.Group>(null);
+  const atomMeshRef = useRef<THREE.InstancedMesh>(null);
+  const bondMeshRef = useRef<THREE.InstancedMesh>(null);
+  const lastHoveredIdxRef = useRef<number | null>(null);
 
   useFrame((_, delta) => {
     if (autoRotate && groupRef.current) {
@@ -124,32 +37,143 @@ export function PolymerChainMesh({
     }
   });
 
+  // 원자 InstancedMesh 행렬 및 색상 일괄 업데이트 (1회 GPU 업로드)
+  useEffect(() => {
+    const mesh = atomMeshRef.current;
+    if (!mesh || atoms.length === 0) return;
+
+    const dummy = new THREE.Object3D();
+    const tempColor = new THREE.Color();
+
+    for (let i = 0; i < atoms.length; i++) {
+      const atom = atoms[i];
+      const radius =
+        styleMode === "spaceFilling"
+          ? atom.radius * 2.2
+          : styleMode === "wireframe"
+          ? atom.radius * 0.4
+          : atom.radius;
+
+      dummy.position.set(atom.position[0], atom.position[1], atom.position[2]);
+      dummy.quaternion.identity();
+      dummy.scale.set(radius, radius, radius);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+
+      const unitHue = (atom.unitIndex * 57) % 360;
+      const colorStr =
+        colorByUnit && atom.element === "C"
+          ? `hsl(${unitHue}, 65%, 48%)`
+          : atom.color;
+      tempColor.set(colorStr);
+      mesh.setColorAt(i, tempColor);
+    }
+
+    mesh.count = atoms.length;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [atoms, styleMode, colorByUnit]);
+
+  // 결합선 InstancedMesh 행렬 및 색상 일괄 업데이트 (1회 GPU 업로드)
+  useEffect(() => {
+    const mesh = bondMeshRef.current;
+    if (!mesh || styleMode === "spaceFilling" || bonds.length === 0) return;
+
+    const dummy = new THREE.Object3D();
+    const vA = new THREE.Vector3();
+    const vB = new THREE.Vector3();
+    const mid = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const tempColor = new THREE.Color();
+
+    for (let i = 0; i < bonds.length; i++) {
+      const bond = bonds[i];
+      vA.set(bond.posA[0], bond.posA[1], bond.posA[2]);
+      vB.set(bond.posB[0], bond.posB[1], bond.posB[2]);
+      mid.addVectors(vA, vB).multiplyScalar(0.5);
+      dir.subVectors(vB, vA);
+      const len = Math.max(dir.length(), 0.05);
+
+      if (len > 0.0001) {
+        dir.normalize();
+        quat.setFromUnitVectors(UP_AXIS, dir);
+      } else {
+        quat.identity();
+      }
+
+      const baseRadius = bond.isInterUnit ? 0.1 : 0.075;
+      const effectiveRadius =
+        bond.order === 2
+          ? baseRadius * 1.35
+          : bond.order === 3
+          ? baseRadius * 1.6
+          : baseRadius;
+
+      dummy.position.copy(mid);
+      dummy.quaternion.copy(quat);
+      dummy.scale.set(effectiveRadius, len, effectiveRadius);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
+
+      tempColor.set(bond.isInterUnit ? "#38bdf8" : "#64748b");
+      mesh.setColorAt(i, tempColor);
+    }
+
+    mesh.count = bonds.length;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [bonds, styleMode]);
+
   return (
     // 고분자 사슬 중심이 (0, 0, 0)에 오도록 오프셋
     <group ref={groupRef} position={[-center[0], -center[1], -center[2]]}>
-      {/* 결합선 렌더링 (spaceFilling 모드에서는 결합 숨김) */}
-      {styleMode !== "spaceFilling" &&
-        bonds.map((bond) => (
-          <BondCylinder
-            key={bond.id}
-            posA={bond.posA}
-            posB={bond.posB}
-            order={bond.order}
-            color={bond.isInterUnit ? "#38bdf8" : "#64748b"}
-            radius={bond.isInterUnit ? 0.10 : 0.075}
+      {/* 결합선 InstancedMesh (단일 Draw Call) */}
+      {styleMode !== "spaceFilling" && bonds.length > 0 && (
+        <instancedMesh
+          key={`bonds-${bonds.length}`}
+          ref={bondMeshRef}
+          args={[SHARED_BOND_CYLINDER_GEOM, undefined, bonds.length]}
+          frustumCulled={false}
+        >
+          <meshStandardMaterial
+            roughness={0.35}
+            metalness={0.25}
+            transparent={true}
+            opacity={0.92}
           />
-        ))}
+        </instancedMesh>
+      )}
 
-      {/* 원자 렌더링 */}
-      {atoms.map((atom) => (
-        <AtomSphere
-          key={atom.id}
-          atom={atom}
-          styleMode={styleMode}
-          colorByUnit={colorByUnit}
-          onHover={onHoverAtom}
-        />
-      ))}
+      {/* 원자 구체 InstancedMesh (단일 Draw Call + instanceId 호버 감지) */}
+      {atoms.length > 0 && (
+        <instancedMesh
+          key={`atoms-${atoms.length}`}
+          ref={atomMeshRef}
+          args={[SHARED_ATOM_SPHERE_GEOM, undefined, atoms.length]}
+          frustumCulled={false}
+          onPointerMove={(e) => {
+            e.stopPropagation();
+            const idx = e.instanceId;
+            if (idx !== undefined && idx !== lastHoveredIdxRef.current) {
+              lastHoveredIdxRef.current = idx;
+              onHoverAtom?.(atoms[idx] ?? null);
+            }
+          }}
+          onPointerOut={() => {
+            lastHoveredIdxRef.current = null;
+            onHoverAtom?.(null);
+          }}
+        >
+          <meshStandardMaterial
+            roughness={0.2}
+            metalness={0.15}
+            wireframe={styleMode === "wireframe"}
+          />
+        </instancedMesh>
+      )}
     </group>
   );
 }
@@ -187,6 +211,13 @@ export function MacroPolymerCoilMesh({
 
     return { geometry: geom, center: [midX, midY, midZ] as [number, number, number] };
   }, [points]);
+
+  // 슬라이더 조작 시 이전 TubeGeometry VRAM 즉시 해제 (메모리 누수 방지)
+  useEffect(() => {
+    return () => {
+      geometry?.dispose();
+    };
+  }, [geometry]);
 
   if (!geometry) return null;
 

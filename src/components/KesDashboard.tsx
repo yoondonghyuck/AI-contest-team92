@@ -28,6 +28,9 @@ import { MathTopologyPanel } from "./MathTopologyPanel";
 import { MathPhysicsDebugger } from "./MathPhysicsDebugger";
 import { MathEngineLive } from "./MathEngineLive";
 import { ResearchValuePanel } from "./ResearchValuePanel";
+import { LiveSyntheticRecommendPanel, type LiveApplyPayload } from "./LiveSyntheticRecommendPanel";
+
+import type { DetailedCopolymerEvaluation } from "../model/polymerBlendService";
 
 const METRICS: {
   key: keyof KesProperties;
@@ -49,9 +52,13 @@ interface Props {
   latencyMs: number;
   currentPolymer?: PolymerDefinition;
   inputs?: FiberInputs;
+  onInputsChange?: (next: FiberInputs) => void;
   onOpenMathLab?: () => void;
+  onOpenLiveRecommendModal?: () => void;
+  onApplyLiveRecommendation?: (payload: LiveApplyPayload) => void;
   sketchAtoms?: AtomNode[];
   sketchBonds?: BondEdge[];
+  copolymerEvaluation?: DetailedCopolymerEvaluation | null;
 }
 
 export function KesDashboard({
@@ -59,12 +66,18 @@ export function KesDashboard({
   latencyMs,
   currentPolymer,
   inputs,
+  onInputsChange,
   onOpenMathLab,
+  onOpenLiveRecommendModal,
+  onApplyLiveRecommendation,
   sketchAtoms,
   sketchBonds,
+  copolymerEvaluation,
 }: Props) {
   const { kes, dyeability, physical, fabricAssessment, recommendedUse } = props;
-  const [activeTab, setActiveTab] = useState<"comprehensive" | "radar" | "mathLab" | "researchValue">("comprehensive");
+  const [activeTab, setActiveTab] = useState<
+    "comprehensive" | "radar" | "mathLab" | "researchValue" | "liveRecommend"
+  >("comprehensive");
   const [mathSubTab, setMathSubTab] = useState<"topology" | "physics" | "surrogate">("topology");
 
   const radar = METRICS.map((m) => ({
@@ -129,9 +142,30 @@ export function KesDashboard({
             <Award size={13} />
             <span>신소재 R&D 가치성 평가</span>
           </button>
+          <button
+            onClick={() => setActiveTab("liveRecommend")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold transition cursor-pointer ${
+              activeTab === "liveRecommend"
+                ? "bg-gradient-to-r from-emerald-500 via-amber-500 to-rose-500 text-slate-950 font-extrabold shadow-md shadow-amber-500/25"
+                : "bg-amber-500/10 border border-amber-400/30 text-amber-300 hover:bg-amber-500/20 hover:text-white"
+            }`}
+          >
+            <Sparkles size={13} />
+            <span>실시간 신소재 R&D 추천 (LIVE 5,000)</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-2.5 text-[10px] text-slate-500">
+          {onOpenLiveRecommendModal && (
+            <button
+              onClick={onOpenLiveRecommendModal}
+              className="flex items-center gap-1 rounded-md bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-400/40 px-2 py-0.5 text-[11px] font-semibold transition cursor-pointer"
+              title="실시간 S급 신소재 R&D 추천 탐색기 전체화면 열기"
+            >
+              <Sparkles size={11} />
+              <span>추천 탐색기 확대</span>
+            </button>
+          )}
           {onOpenMathLab && (
             <button
               onClick={onOpenMathLab}
@@ -148,13 +182,27 @@ export function KesDashboard({
 
       {/* 탭 내용 영역 */}
       <div className="flex-1 min-h-0 overflow-y-auto pt-2.5">
-        {activeTab === "researchValue" ? (
+        {activeTab === "liveRecommend" ? (
+          <LiveSyntheticRecommendPanel
+            isEmbedded={true}
+            currentPolymerId={currentPolymer?.id}
+            onApplyRecommendation={(payload) => {
+              if (onApplyLiveRecommendation) {
+                onApplyLiveRecommendation(payload);
+              }
+            }}
+            className="rounded-xl border border-amber-500/30"
+          />
+        ) : activeTab === "researchValue" ? (
           <ResearchValuePanel
             currentPolymer={currentPolymer || ({} as any)}
             inputs={inputs || ({} as any)}
             comprehensive={props}
             sketchAtoms={sketchAtoms}
             sketchBonds={sketchBonds}
+            copolymerEvaluation={copolymerEvaluation}
+            onInputsChange={onInputsChange}
+            onApplyLiveRecommendation={onApplyLiveRecommendation}
           />
         ) : activeTab === "comprehensive" ? (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

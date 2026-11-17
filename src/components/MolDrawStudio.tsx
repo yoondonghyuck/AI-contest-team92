@@ -14,7 +14,6 @@ import {
   Eraser,
   CheckCircle2,
   Atom,
-  BookOpen,
   Layers,
   FlaskConical,
   X,
@@ -29,6 +28,8 @@ import {
   Ruler,
   Wrench,
   Sparkles,
+  Database,
+  Plus,
 } from "lucide-react";
 import {
   MolDrawCanvas,
@@ -47,8 +48,15 @@ import {
   POPULAR_MOLECULES,
   MAIN_LAB_POLYMER_PRESETS,
   type PresetCategory,
+  type PresetMolecule,
   createPolymerFromSketch,
+  realRecordToPresetMolecule,
+  appendMoleculeToCanvas,
 } from "../model/moldrawPresets";
+import {
+  loadPolymerInformaticsDataset,
+  searchPolymers,
+} from "../model/polymerDatasetService";
 import {
   validateMolecularStructure,
   autoFixMolecularStructure,
@@ -67,34 +75,77 @@ import {
 import type { PolymerDefinition } from "../model/polymers";
 import { predictComprehensive } from "../model/surrogate";
 import { DEFAULT_INPUTS, type ComprehensiveProperties, type FiberInputs } from "../types";
+import {
+  interceptPolymerStructureFormula,
+  buildCopolymer3DFromParsedStructure,
+  type ParsedCopolymerStructure,
+} from "../model/chatMolecularParser";
 
 export interface MolDrawStudioProps {
+  initialAtoms?: AtomNode[];
+  initialBonds?: BondEdge[];
+  parsedCopolymer?: ParsedCopolymerStructure;
+  onStructureChange?: (
+    atoms: AtomNode[],
+    bonds: BondEdge[],
+    descriptor: MolecularDescriptor,
+    parsedCopolymer?: ParsedCopolymerStructure
+  ) => void;
   onApplyToMainModel?: (data: {
     polymer: PolymerDefinition;
     descriptor: MolecularDescriptor;
     atoms: AtomNode[];
     bonds: BondEdge[];
+    parsedCopolymer?: ParsedCopolymerStructure;
   }) => void;
   className?: string;
   onClose?: () => void;
 }
 
 export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
+  initialAtoms,
+  initialBonds,
+  parsedCopolymer,
+  onStructureChange,
   onApplyToMainModel,
   className = "",
   onClose,
 }) => {
-  // 1. 분자 구조 상태 (LocalStorage 자동 복원 또는 벤젠 기본값)
+  // 1. 분자 구조 상태 (외부 연동 구조 우선 -> LocalStorage 자동 복원 -> 벤젠 기본값)
   const [atoms, setAtoms] = useState<AtomNode[]>(() => {
+    if (initialAtoms && initialAtoms.length > 0) return initialAtoms;
     const autosaved = loadCurrentWorkingSketch();
     if (autosaved && autosaved.atoms.length > 0) return autosaved.atoms;
     return POPULAR_MOLECULES[0].atoms;
   });
   const [bonds, setBonds] = useState<BondEdge[]>(() => {
+    if (initialBonds && initialBonds.length > 0) return initialBonds;
     const autosaved = loadCurrentWorkingSketch();
     if (autosaved && autosaved.atoms.length > 0) return autosaved.bonds;
     return POPULAR_MOLECULES[0].bonds;
   });
+  const [activeCopolymer, setActiveCopolymer] = useState<ParsedCopolymerStructure | undefined>(parsedCopolymer);
+
+  // 내부 변경인지 외부(채팅/3D 뷰어) 동기화인지 구분하는 플래그 Ref
+  const isInternalChangeRef = useRef(false);
+
+  // 외부(채팅 입력 또는 3D 뷰어)에서 initialAtoms / initialBonds / parsedCopolymer가 변경되면 2D 캔버스도 즉시 실시간 동기화
+  useEffect(() => {
+    if (isInternalChangeRef.current) {
+      isInternalChangeRef.current = false;
+      return;
+    }
+    if (initialAtoms && initialAtoms.length > 0) {
+      setAtoms(initialAtoms);
+      setBonds(initialBonds || []);
+    }
+  }, [initialAtoms, initialBonds]);
+
+  useEffect(() => {
+    if (parsedCopolymer) {
+      setActiveCopolymer(parsedCopolymer);
+    }
+  }, [parsedCopolymer]);
 
   // 자동 저장(Autosave) 동기화
   useEffect(() => {
@@ -113,10 +164,19 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
 
   // 4. 검색창 및 템플릿 모달 상태
   const [searchQuery, setSearchQuery] = useState("");
+  const [modalSearchQuery, setModalSearchQuery] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isLibraryModalOpen, setIsLibraryModalOpen] = useState(false);
-  const [libraryCategory, setLibraryCategory] = useState<"all" | PresetCategory | "saved">("all");
+  const [libraryCategory, setLibraryCategory] = useState<"all" | PresetCategory | "open_db" | "saved">("monomer");
   const [copiedSmiles, setCopiedSmiles] = useState(false);
+  const [datasetLoadedCount, setDatasetLoadedCount] = useState(0);
+
+  // 3,284건 오픈 데이터셋 백그라운드 로드
+  useEffect(() => {
+    loadPolymerInformaticsDataset().then((records) => {
+      setDatasetLoadedCount(records.length);
+    });
+  }, []);
 
   // 5. 유효성 검증(Validation) 상세 모달
   const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
@@ -139,6 +199,23 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  // 2D 스케치 변경 시 메인 모델 / 3D 뷰어 / 채팅창으로 실시간 전파
+  const emitStructureChange = useCallback(
+    (
+      nextAtoms: AtomNode[],
+      nextBonds: BondEdge[],
+      nextCopolymer?: ParsedCopolymerStructure
+    ) => {
+      isInternalChangeRef.current = true;
+      saveCurrentWorkingSketch(nextAtoms, nextBonds);
+      if (onStructureChange && nextAtoms.length > 0) {
+        const nextDesc = calculateMolecularDescriptor(nextAtoms, nextBonds);
+        onStructureChange(nextAtoms, nextBonds, nextDesc, nextCopolymer);
+      }
+    },
+    [onStructureChange]
+  );
+
   // 상태 히스토리 저장
   const pushHistory = useCallback(() => {
     setHistory((prev) => [...prev.slice(-20), { atoms, bonds }]);
@@ -147,11 +224,13 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
   const handleAtomsChange = (nextAtoms: AtomNode[]) => {
     pushHistory();
     setAtoms(nextAtoms);
+    emitStructureChange(nextAtoms, bonds, activeCopolymer);
   };
 
   const handleBondsChange = (nextBonds: BondEdge[]) => {
     pushHistory();
     setBonds(nextBonds);
+    emitStructureChange(atoms, nextBonds, activeCopolymer);
   };
 
   // 실행 취소
@@ -161,6 +240,7 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
     setHistory((h) => h.slice(0, -1));
     setAtoms(prev.atoms);
     setBonds(prev.bonds);
+    emitStructureChange(prev.atoms, prev.bonds, activeCopolymer);
   };
 
   // 전체 초기화
@@ -168,17 +248,36 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
     pushHistory();
     setAtoms([]);
     setBonds([]);
+    setActiveCopolymer(undefined);
   };
 
-  // 프리셋 또는 저장된 분자 로드
-  const handleLoadMolecule = (preset: { atoms: AtomNode[]; bonds: BondEdge[] }) => {
+  // 프리셋 또는 저장된 분자 로드 (교체 로드)
+  const handleLoadMolecule = (preset: { atoms: AtomNode[]; bonds: BondEdge[]; nameKo?: string; name?: string }) => {
     pushHistory();
     setAtoms(preset.atoms);
     setBonds(preset.bonds);
+    setActiveCopolymer(undefined);
+    emitStructureChange(preset.atoms, preset.bonds, undefined);
     setIsSearchOpen(false);
     setIsLibraryModalOpen(false);
     setSearchQuery("");
-    showToast("분자 구조를 성공적으로 불러왔습니다.");
+    showToast(`'${preset.nameKo || preset.name || "분자"}' 구조를 2D 캔버스 및 3D 뷰어에 실시간 연동했습니다.`);
+  };
+
+  // 현재 2D 캔버스에 단량체/고분자를 옆에 이어 붙이기 (조합/공중합 추가)
+  const handleAppendMolecule = (
+    preset: { atoms: AtomNode[]; bonds: BondEdge[]; nameKo?: string; name?: string },
+    connectBond = true
+  ) => {
+    pushHistory();
+    const combined = appendMoleculeToCanvas(atoms, bonds, preset, connectBond);
+    setAtoms(combined.atoms);
+    setBonds(combined.bonds);
+    emitStructureChange(combined.atoms, combined.bonds, activeCopolymer);
+    setIsSearchOpen(false);
+    setIsLibraryModalOpen(false);
+    setSearchQuery("");
+    showToast(`'${preset.nameKo || preset.name || "단량체"}'를 현재 2D 캔버스 사슬에 조합 추가 및 3D 동기화했습니다.`);
   };
 
   // 화학적 유효성 자동 오류 제거 (Auto-Fix Engine)
@@ -188,6 +287,7 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
     pushHistory();
     setAtoms(res.fixedAtoms);
     setBonds(res.fixedBonds);
+    emitStructureChange(res.fixedAtoms, res.fixedBonds, activeCopolymer);
     if (res.fixCount > 0) {
       showToast(
         `[자동 오류 제거] ${res.fixCount}건 교정 완료: ${res.fixDescriptions.slice(0, 2).join(", ")}${
@@ -197,7 +297,7 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
     } else {
       showToast("교정할 오류가 없거나 화학적 결합이 이미 정상입니다.");
     }
-  }, [atoms, bonds, pushHistory]);
+  }, [atoms, bonds, pushHistory, emitStructureChange, activeCopolymer]);
 
   // 분자 디스크립터 실시간 계산
   const descriptor = useMemo(() => {
@@ -251,13 +351,17 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
     showToast(`'${saveName.trim()}' 보관함 저장 완료!`);
   };
 
-  // 저장된 분자 삭제
-  const handleDeleteSaved = (id: string, name: string) => {
-    if (confirm(`'${name}' 분자를 보관함에서 삭제하시겠습니까?`)) {
-      const updated = deleteSavedMolecule(id);
-      setSavedMolecules(updated);
-      showToast(`'${name}' 삭제 완료`);
-    }
+  // 6-1. 보관함 항목 삭제 인라인 확인 상태
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // 저장된 분자 삭제 핸들러 (브라우저 confirm 차단 버그 해결 및 실시간 State/LocalStorage 동기화)
+  const handleDeleteSaved = (e: React.MouseEvent, id: string, name: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const updated = deleteSavedMolecule(id);
+    setSavedMolecules([...updated]);
+    setDeleteConfirmId(null);
+    showToast(`'${name}' 보관함에서 삭제되었습니다.`);
   };
 
   // JSON 백업 다운로드
@@ -292,6 +396,24 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
     e.target.value = "";
   };
 
+  // [2D 스튜디오 구조식 인터셉터]: "폴리스티렌-graft-폴리프로필렌", "PS-b-PP-g-PE" 등 입력 시 감지
+  const interceptedCopolymer = useMemo<ParsedCopolymerStructure | null>(() => {
+    if (!searchQuery.trim()) return null;
+    return interceptPolymerStructureFormula(searchQuery.trim());
+  }, [searchQuery]);
+
+  const handleApplyInterceptedCopolymer = (parsed: ParsedCopolymerStructure) => {
+    const built = buildCopolymer3DFromParsedStructure(parsed);
+    pushHistory();
+    setAtoms(built.atoms);
+    setBonds(built.bonds);
+    setActiveCopolymer(parsed);
+    emitStructureChange(built.atoms, built.bonds, parsed);
+    setIsSearchOpen(false);
+    setSearchQuery("");
+    showToast(parsed.systemMessage);
+  };
+
   // 검색 필터링된 프리셋
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return POPULAR_MOLECULES;
@@ -305,12 +427,41 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
     );
   }, [searchQuery]);
 
-  // 라이브러리 모달 내 카테고리 필터링된 프리셋
+  // 3,284건 오픈 데이터셋 검색 결과 (상단 드롭다운용)
+  const openDbSearchResults = useMemo(() => {
+    if (datasetLoadedCount === 0) return [];
+    const q = searchQuery.trim();
+    const res = searchPolymers({ query: q || undefined, limit: q ? 12 : 6 });
+    return res.results.map(realRecordToPresetMolecule);
+  }, [searchQuery, datasetLoadedCount]);
+
+  // 라이브러리 모달 내 카테고리 + 검색어 필터링된 프리셋
   const filteredLibraryPresets = useMemo(() => {
-    if (libraryCategory === "all") return POPULAR_MOLECULES;
-    if (libraryCategory === "saved") return [];
-    return POPULAR_MOLECULES.filter((m) => m.category === libraryCategory);
-  }, [libraryCategory]);
+    let base: PresetMolecule[] = [];
+    if (libraryCategory === "all") base = POPULAR_MOLECULES;
+    else if (libraryCategory === "saved") return [];
+    else if (libraryCategory === "open_db") {
+      if (datasetLoadedCount === 0) return [];
+      const res = searchPolymers({
+        query: modalSearchQuery.trim() || undefined,
+        limit: 36,
+      });
+      return res.results.map(realRecordToPresetMolecule);
+    } else {
+      base = POPULAR_MOLECULES.filter((m) => m.category === libraryCategory);
+    }
+
+    if (!modalSearchQuery.trim()) return base;
+    const q = modalSearchQuery.toLowerCase();
+    return base.filter(
+      (m) =>
+        m.name.toLowerCase().includes(q) ||
+        m.nameKo.toLowerCase().includes(q) ||
+        m.formula.toLowerCase().includes(q) ||
+        m.smiles.toLowerCase().includes(q) ||
+        m.description.toLowerCase().includes(q)
+    );
+  }, [libraryCategory, modalSearchQuery, datasetLoadedCount]);
 
   return (
     <div
@@ -341,16 +492,21 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
                 MolDraw Studio
               </span>
               <span className="rounded-full bg-sky-500/20 border border-sky-400/30 px-2 py-0.2 text-[10px] text-sky-300 font-semibold">
-                2D ➔ 3D Lab
+                2D ➔ 3D 실시간 연동됨
               </span>
+              {activeCopolymer && (
+                <span className="rounded-full bg-emerald-500/20 border border-emerald-400/40 px-2 py-0.2 text-[10px] text-emerald-300 font-bold">
+                  🧬 {activeCopolymer.componentDetails.map((c) => c.shortName).join("-")} ({activeCopolymer.structure_type.toUpperCase()})
+                </span>
+              )}
             </div>
             <p className="text-[10px] text-slate-400">
-              화학적 유효성 검증(Valence Check) 및 실시간 3D 물리 시뮬레이터
+              2D 스케치 · 3D 뷰어 · AI 채팅창 양방향 실시간 동기화 에디터
             </p>
           </div>
         </div>
 
-        {/* 중앙: PubChem 스타일 스마트 분자 검색 바 */}
+        {/* 중앙: PubChem 스타일 스마트 분자 & 공중합 구조식 검색 바 */}
         <div className="relative flex-1 max-w-md mx-2">
           <div className="relative">
             <Search
@@ -359,19 +515,51 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
             />
             <input
               type="text"
-              placeholder="분자 검색 (PE, PET, 나일론, 아크릴, 벤젠, TPA 등)..."
+              placeholder="단량체/고분자 또는 구조식 입력 (예: 폴리스티렌-graft-폴리프로필렌, PS-b-PP-g-PE)..."
               value={searchQuery}
               onFocus={() => setIsSearchOpen(true)}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  if (interceptedCopolymer) {
+                    e.preventDefault();
+                    handleApplyInterceptedCopolymer(interceptedCopolymer);
+                  } else if (searchResults.length > 0) {
+                    e.preventDefault();
+                    handleLoadMolecule(searchResults[0]);
+                  }
+                }
+              }}
               className="w-full pl-8 pr-4 py-1.5 bg-slate-900/90 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 transition"
             />
           </div>
 
-          {/* 검색 드롭다운 결과 */}
+          {/* 검색 드롭다운 결과 (구조식 인터셉터 + 기본 49종 + 3,284건 오픈 데이터셋 실시간 연동) */}
           {isSearchOpen && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-2 z-50 max-h-72 overflow-y-auto">
-              <div className="text-[10px] text-slate-400 px-2 py-1 font-semibold uppercase tracking-wider flex justify-between items-center">
-                <span>추천 화학식 & 반복단위 ({searchResults.length})</span>
+            <div className="absolute top-full left-0 right-0 mt-1 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-2 z-50 max-h-96 overflow-y-auto">
+              {/* 공중합 구조식 인터셉트 즉시 실행 배너 */}
+              {interceptedCopolymer && (
+                <button
+                  type="button"
+                  onClick={() => handleApplyInterceptedCopolymer(interceptedCopolymer)}
+                  className="w-full text-left mb-2 p-2.5 rounded-xl bg-gradient-to-r from-emerald-950/90 via-teal-950/80 to-slate-900 border border-emerald-400/60 hover:border-emerald-300 transition flex items-center justify-between gap-2 shadow-lg"
+                >
+                  <div>
+                    <div className="text-[10px] font-extrabold text-emerald-300 flex items-center gap-1">
+                      <Sparkles size={11} />
+                      <span>복합 공중합 구조식 감지 — 2D 캔버스 & 3D 뷰어 동시 생성 (Enter)</span>
+                    </div>
+                    <div className="text-xs font-bold text-white mt-0.5">
+                      {interceptedCopolymer.componentDetails.map((m) => `${m.koreanName}(${m.shortName})`).join(` -${interceptedCopolymer.structure_type}- `)}
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-500 text-slate-950 font-extrabold text-[10px] shrink-0">
+                    즉시 반영 →
+                  </span>
+                </button>
+              )}
+              <div className="text-[10px] text-slate-400 px-2 py-1 font-semibold uppercase tracking-wider flex justify-between items-center border-b border-slate-800/80 mb-1">
+                <span>단량체 & 베이스라인 30종 ({searchResults.length})</span>
                 <button
                   onClick={() => setIsSearchOpen(false)}
                   className="text-slate-500 hover:text-white"
@@ -380,29 +568,113 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
                 </button>
               </div>
               {searchResults.map((preset) => (
-                <button
+                <div
                   key={preset.id}
-                  onClick={() => handleLoadMolecule(preset)}
-                  className="w-full text-left px-3 py-2 rounded-lg hover:bg-slate-800 text-xs transition flex items-center justify-between group"
+                  className="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-800 text-xs transition flex items-center justify-between gap-2 group"
                 >
-                  <div>
+                  <div
+                    onClick={() => handleLoadMolecule(preset)}
+                    className="flex-1 cursor-pointer min-w-0"
+                  >
                     <div className="font-semibold text-slate-200 group-hover:text-sky-300 flex items-center gap-1.5">
-                      <span>{preset.nameKo}</span>
-                      {preset.category === "polymer" && (
-                        <span className="text-[9px] bg-indigo-950/80 text-indigo-300 px-1.5 py-0.2 rounded border border-indigo-800/60 font-normal">
-                          메인 랩
+                      <span className="truncate">{preset.nameKo}</span>
+                      {preset.category === "polymer" ? (
+                        <span className="text-[9px] bg-indigo-950/80 text-indigo-300 px-1.5 py-0.2 rounded border border-indigo-800/60 font-normal shrink-0">
+                          베이스라인 30종
+                        </span>
+                      ) : (
+                        <span className="text-[9px] bg-emerald-950/80 text-emerald-300 px-1.5 py-0.2 rounded border border-emerald-800/60 font-normal shrink-0">
+                          단량체
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px] text-slate-400 font-mono">
-                      {preset.name} · {preset.formula}
+                    <div className="text-[11px] text-slate-400 font-mono truncate">
+                      {preset.name} · {preset.formula} ({preset.mw} g/mol)
                     </div>
                   </div>
-                  <span className="text-[11px] font-mono text-sky-400 bg-sky-950/60 px-2 py-0.5 rounded border border-sky-800/60">
-                    {preset.mw} g/mol
-                  </span>
-                </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleLoadMolecule(preset)}
+                      className="text-[10px] font-bold text-sky-300 bg-sky-950/80 hover:bg-sky-600 hover:text-white px-2 py-1 rounded border border-sky-700/60 transition"
+                      title="캔버스를 비우고 이 단량체/분자를 새로 불러옵니다"
+                    >
+                      불러오기
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAppendMolecule(preset, true)}
+                      className="text-[10px] font-bold text-emerald-300 bg-emerald-950/80 hover:bg-emerald-600 hover:text-white px-2 py-1 rounded border border-emerald-700/60 transition flex items-center gap-0.5"
+                      title="현재 2D 캔버스에 그려진 구조 옆에 이 단량체를 이어 붙여 조합합니다"
+                    >
+                      <Plus size={11} />
+                      <span>조합</span>
+                    </button>
+                  </div>
+                </div>
               ))}
+
+              {/* 3,284건 오픈 데이터셋 검색 결과 섹션 */}
+              {openDbSearchResults.length > 0 && (
+                <>
+                  <div className="text-[10px] text-emerald-400 px-2 py-1.5 mt-2 font-semibold uppercase tracking-wider flex justify-between items-center border-t border-slate-800">
+                    <span className="flex items-center gap-1">
+                      <Database size={11} />
+                      오픈 데이터셋 3,284건 단량체/반복단위 매칭 ({openDbSearchResults.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSearchOpen(false);
+                        setLibraryCategory("open_db");
+                        setModalSearchQuery(searchQuery);
+                        setIsLibraryModalOpen(true);
+                      }}
+                      className="text-sky-400 hover:underline text-[10px]"
+                    >
+                      전체 3,284건 모달 열기 →
+                    </button>
+                  </div>
+                  {openDbSearchResults.map((preset) => (
+                    <div
+                      key={preset.id}
+                      className="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-800 text-xs transition flex items-center justify-between gap-2 group"
+                    >
+                      <div
+                        onClick={() => handleLoadMolecule(preset)}
+                        className="flex-1 cursor-pointer min-w-0"
+                      >
+                        <div className="font-semibold text-slate-200 group-hover:text-emerald-300 flex items-center gap-1.5">
+                          <span className="truncate">{preset.nameKo}</span>
+                          <span className="text-[9px] bg-teal-950/80 text-teal-300 px-1.5 py-0.2 rounded border border-teal-800/60 font-normal shrink-0">
+                            오픈DB
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono truncate">
+                          {preset.formula} · SMILES: {preset.smiles}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleLoadMolecule(preset)}
+                          className="text-[10px] font-bold text-sky-300 bg-sky-950/80 hover:bg-sky-600 hover:text-white px-2 py-1 rounded border border-sky-700/60 transition"
+                        >
+                          불러오기
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAppendMolecule(preset, true)}
+                          className="text-[10px] font-bold text-emerald-300 bg-emerald-950/80 hover:bg-emerald-600 hover:text-white px-2 py-1 rounded border border-emerald-700/60 transition flex items-center gap-0.5"
+                        >
+                          <Plus size={11} />
+                          <span>조합</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           )}
         </div>
@@ -592,8 +864,29 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
           </div>
         </div>
 
-        {/* 우측 도구: 치수선 토글 + 자동오류제거 퀵버튼 + 라이브러리 퀵 오픈 */}
-        <div className="flex items-center gap-2">
+        {/* 우측 도구: 퀵 단량체 스탬프 + 치수선 토글 + 자동오류제거 퀵버튼 + 단량체 라이브러리 퀵 오픈 */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* 핵심 단량체 퀵 불러오기/조합 바 */}
+          <div className="hidden lg:flex items-center gap-1 bg-slate-900/80 px-2 py-0.5 rounded-lg border border-slate-800">
+            <span className="text-[10px] text-emerald-400 font-bold mr-1">단량체 퀵조합:</span>
+            {["ethylene", "propylene", "styrene", "mma", "acrylonitrile", "terephthalic_acid"].map((mid) => {
+              const mp = POPULAR_MOLECULES.find((m) => m.id === mid);
+              if (!mp) return null;
+              return (
+                <button
+                  key={mid}
+                  type="button"
+                  onClick={() => handleAppendMolecule(mp, true)}
+                  className="px-2 py-0.5 rounded bg-slate-800/80 hover:bg-emerald-600/30 hover:text-emerald-200 text-slate-300 border border-slate-700/60 text-[10px] font-medium transition flex items-center gap-0.5"
+                  title={`${mp.nameKo} (${mp.formula}) 단량체를 2D 캔버스에 추가/조합합니다 (Shift 없이 클릭 시 이어 붙이기)`}
+                >
+                  <Plus size={9} className="text-emerald-400" />
+                  <span>{mp.nameKo.split(" ")[0]}</span>
+                </button>
+              );
+            })}
+          </div>
+
           {/* 치수선(결합 길이/각도) 토글 버튼 */}
           <button
             onClick={() => setShowDimensions((prev) => !prev)}
@@ -620,11 +913,14 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
           )}
 
           <button
-            onClick={() => setIsLibraryModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-400/30 text-xs font-semibold shadow-sm transition"
+            onClick={() => {
+              setLibraryCategory("monomer");
+              setIsLibraryModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 text-xs font-bold shadow-sm transition cursor-pointer"
           >
-            <BookOpen size={13} />
-            <span>화학식 & 고분자 라이브러리 (45+)</span>
+            <Database size={13} />
+            <span>단량체 라이브러리 불러오기 (3,284건 오픈DB + 49종)</span>
           </button>
         </div>
       </div>
@@ -787,38 +1083,66 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-[#0b1220] border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
             {/* 모달 헤더 */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800/90 bg-slate-950/80">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-slate-800/90 bg-slate-950/80">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-sky-500/20 text-sky-400 rounded-xl border border-sky-400/30">
-                  <BookOpen size={20} />
+                <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-400/30">
+                  <Database size={20} />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-white">화학식 & 고분자 라이브러리</h3>
+                  <h3 className="text-base font-bold text-white">
+                    단량체 & 오픈 데이터셋 라이브러리 불러오기
+                  </h3>
                   <p className="text-xs text-slate-400">
-                    메인 랩 30종 고분자 및 내가 직접 저장한 커스텀 분자 보관함을 관리하세요.
+                    3,284건 오픈 데이터셋, 베이스라인 30종 고분자 및 핵심 단량체를 검색해 2D 캔버스에 불러오거나 이어서 조합하세요.
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => setIsLibraryModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
-              >
-                <X size={18} />
-              </button>
+
+              {/* 모달 내 실시간 검색창 */}
+              <div className="flex items-center gap-2 flex-1 max-w-xs">
+                <div className="relative flex-1">
+                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={modalSearchQuery}
+                    onChange={(e) => setModalSearchQuery(e.target.value)}
+                    placeholder="스티렌, 에틸렌, 프로필렌, SMILES 검색..."
+                    className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+                <button
+                  onClick={() => setIsLibraryModalOpen(false)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             {/* 카테고리 탭 및 백업 버튼 */}
             <div className="flex flex-wrap items-center justify-between px-6 py-2.5 border-b border-slate-800/60 bg-slate-950/40 text-xs gap-2">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
-                  onClick={() => setLibraryCategory("all")}
-                  className={`px-3 py-1.5 rounded-lg transition font-medium ${
-                    libraryCategory === "all"
-                      ? "bg-sky-500 text-white shadow-sm"
+                  onClick={() => setLibraryCategory("monomer")}
+                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center gap-1.5 ${
+                    libraryCategory === "monomer"
+                      ? "bg-emerald-600 text-white shadow-sm"
                       : "text-slate-400 hover:text-white hover:bg-slate-900"
                   }`}
                 >
-                  전체 프리셋 ({POPULAR_MOLECULES.length})
+                  <FlaskConical size={13} />
+                  <span>단량체 & 반응물</span>
+                </button>
+                <button
+                  onClick={() => setLibraryCategory("open_db")}
+                  className={`px-3 py-1.5 rounded-lg transition font-bold flex items-center gap-1.5 ${
+                    libraryCategory === "open_db"
+                      ? "bg-teal-600 text-white shadow-sm"
+                      : "text-teal-300/80 hover:text-white hover:bg-slate-900 border border-teal-500/30"
+                  }`}
+                >
+                  <Database size={13} />
+                  <span>오픈 데이터셋 (3,284건)</span>
                 </button>
                 <button
                   onClick={() => setLibraryCategory("polymer")}
@@ -829,18 +1153,17 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
                   }`}
                 >
                   <Layers size={13} />
-                  <span>메인 랩 반복단위 ({MAIN_LAB_POLYMER_PRESETS.length})</span>
+                  <span>베이스라인 30종 ({MAIN_LAB_POLYMER_PRESETS.length})</span>
                 </button>
                 <button
-                  onClick={() => setLibraryCategory("monomer")}
-                  className={`px-3 py-1.5 rounded-lg transition font-medium flex items-center gap-1.5 ${
-                    libraryCategory === "monomer"
-                      ? "bg-sky-600 text-white shadow-sm"
+                  onClick={() => setLibraryCategory("all")}
+                  className={`px-3 py-1.5 rounded-lg transition font-medium ${
+                    libraryCategory === "all"
+                      ? "bg-sky-500 text-white shadow-sm"
                       : "text-slate-400 hover:text-white hover:bg-slate-900"
                   }`}
                 >
-                  <FlaskConical size={13} />
-                  <span>단량체 & 반응물</span>
+                  전체 프리셋 ({POPULAR_MOLECULES.length})
                 </button>
                 <button
                   onClick={() => setLibraryCategory("saved")}
@@ -924,13 +1247,48 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
                         <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-[10px] text-slate-400">
                           <span className="font-mono">원자 {saved.atoms.length} / 결합 {saved.bonds.length}</span>
                           <div className="flex items-center gap-2">
+                            {deleteConfirmId === saved.id ? (
+                              <div
+                                className="flex items-center gap-1 rounded-lg bg-rose-950/90 border border-rose-500/60 p-0.5"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <span className="text-[9px] font-bold text-rose-300 px-1">삭제?</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleDeleteSaved(e, saved.id, saved.name)}
+                                  className="rounded bg-rose-600 hover:bg-rose-500 text-white px-1.5 py-0.5 text-[9px] font-bold transition shadow-sm"
+                                >
+                                  확인
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    setDeleteConfirmId(null);
+                                  }}
+                                  className="rounded bg-slate-800 hover:bg-slate-700 text-slate-300 px-1.5 py-0.5 text-[9px] transition"
+                                >
+                                  취소
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setDeleteConfirmId(saved.id);
+                                }}
+                                className="flex items-center gap-1 rounded bg-rose-500/10 hover:bg-rose-500/25 border border-rose-500/30 px-2 py-0.5 text-[10px] text-rose-300 hover:text-rose-200 transition"
+                                title="보관함에서 삭제"
+                              >
+                                <Trash2 size={11} />
+                                <span>삭제</span>
+                              </button>
+                            )}
                             <button
-                              onClick={() => handleDeleteSaved(saved.id, saved.name)}
-                              className="text-rose-400 hover:underline hover:text-rose-300"
-                            >
-                              삭제
-                            </button>
-                            <button
+                              type="button"
                               onClick={() => handleLoadMolecule(saved)}
                               className="text-amber-400 group-hover:underline font-bold"
                             >
@@ -943,15 +1301,17 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
                   </div>
                 )
               ) : (
-                /* ── 기본 프리셋 목록 ── */
+                /* ── 기본 프리셋 & 3,284건 오픈 데이터셋 목록 ── */
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                   {filteredLibraryPresets.map((preset) => (
                     <div
                       key={preset.id}
-                      onClick={() => handleLoadMolecule(preset)}
-                      className="group relative p-3.5 rounded-xl border border-slate-800/80 bg-slate-900/60 hover:bg-slate-800/80 hover:border-sky-500/50 cursor-pointer transition flex flex-col justify-between gap-2 shadow-sm"
+                      className="group relative p-3.5 rounded-xl border border-slate-800/80 bg-slate-900/60 hover:bg-slate-800/80 hover:border-sky-500/50 transition flex flex-col justify-between gap-2 shadow-sm"
                     >
-                      <div>
+                      <div
+                        onClick={() => handleLoadMolecule(preset)}
+                        className="cursor-pointer"
+                      >
                         <div className="flex items-start justify-between gap-2">
                           <span className="font-semibold text-xs text-slate-100 group-hover:text-sky-300 transition">
                             {preset.nameKo}
@@ -960,7 +1320,7 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
                             {preset.mw} g/mol
                           </span>
                         </div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                        <div className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">
                           {preset.name} · {preset.formula}
                         </div>
                         <p className="text-[11px] text-slate-500 line-clamp-2 mt-1.5">
@@ -968,9 +1328,26 @@ export const MolDrawStudio: React.FC<MolDrawStudioProps> = ({
                         </p>
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-[10px] text-slate-400">
-                        <span className="font-mono">원자 {preset.atoms.length}개 / 결합 {preset.bonds.length}개</span>
-                        <span className="text-sky-400 group-hover:underline font-semibold">불러오기 →</span>
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 text-[10px] text-slate-400 gap-1">
+                        <span className="font-mono">원자 {preset.atoms.length} / 결합 {preset.bonds.length}</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleLoadMolecule(preset)}
+                            className="px-2 py-0.5 rounded bg-sky-500/20 hover:bg-sky-500 text-sky-300 hover:text-white border border-sky-500/40 font-semibold transition"
+                          >
+                            단독 로드
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleAppendMolecule(preset, true)}
+                            className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500 text-emerald-300 hover:text-white border border-emerald-500/40 font-semibold transition flex items-center gap-0.5"
+                            title="현재 캔버스에 있는 구조 옆에 이어 붙여 공중합/조합합니다"
+                          >
+                            <Plus size={10} />
+                            <span>조합 추가</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}

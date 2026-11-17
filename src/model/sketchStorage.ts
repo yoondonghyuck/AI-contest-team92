@@ -78,16 +78,16 @@ const DEFAULT_SAVED_SAMPLES: SavedMoleculePreset[] = [
 export function loadSavedMolecules(): SavedMoleculePreset[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_SAVED_LIST);
-    if (!raw) {
+    if (raw === null) {
       // 최초 실행 시 기본 샘플 등록
       localStorage.setItem(STORAGE_KEY_SAVED_LIST, JSON.stringify(DEFAULT_SAVED_SAMPLES));
       return DEFAULT_SAVED_SAMPLES;
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : DEFAULT_SAVED_SAMPLES;
+    return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
     console.warn("Failed to read saved molecules from localStorage:", err);
-    return DEFAULT_SAVED_SAMPLES;
+    return [];
   }
 }
 
@@ -149,7 +149,9 @@ export function saveNamedMolecule(
  * 3. 저장된 분자 삭제
  */
 export function deleteSavedMolecule(id: string): SavedMoleculePreset[] {
-  const list = loadSavedMolecules().filter((m) => m.id !== id);
+  const current = loadSavedMolecules();
+  const targetId = String(id).trim();
+  const list = current.filter((m) => String(m.id).trim() !== targetId);
   try {
     localStorage.setItem(STORAGE_KEY_SAVED_LIST, JSON.stringify(list));
   } catch (err) {
